@@ -68,7 +68,7 @@ export const envSchema = z.object({
   HISTORY_SYNC_DAYS: z
     .string()
     .optional()
-    .default('365')
+    .default('7')
     .transform((val) => Number.parseInt(val, 10))
     .refine((val) => !Number.isNaN(val) && val >= 1 && val <= 1825, {
       message: 'HISTORY_SYNC_DAYS must be an integer between 1 and 1825 days (up to 5 years)',

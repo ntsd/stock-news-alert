@@ -107,8 +107,8 @@ The service embeds a dark-mode web application and REST API at `http://localhost
    - High-confidence alerts generate audio broadcasts via ElevenLabs' low-latency `eleven_turbo_v2_5` model, sent as voice memos with HTML captions.
 4. **Sentry Agent Tracing:**
    - Instruments OpenTelemetry trace spans across Jev decisions, Finnhub polling, and ElevenLabs audio generation to monitor decision latency and token efficiency.
-5. **Dynamic Incremental Sync & 1-Year Historical Backfill (`HISTORY_SYNC_DAYS`):**
-   - **First Run:** Queries Finnhub for the past 1 year (configurable via `HISTORY_SYNC_DAYS`, default 365 days) of news across each ticker, smartly seeds recent catalysts with Jev, and populates the historical dashboard overview silently.
+5. **Dynamic Incremental Sync & Historical Backfill (`HISTORY_SYNC_DAYS`):**
+   - **First Run:** Queries Finnhub for the past 7 days (configurable via `HISTORY_SYNC_DAYS`, default 7 days) of news across each ticker, smartly seeds recent catalysts with Jev, and populates the historical dashboard overview silently.
    - **Subsequent Runs (e.g. After Downtime):** Tracks `lastSyncDate` per symbol in MongoDB Atlas (`sync_metadata` collection). If the bot was offline for 10 days, on startup it automatically queries from 10 days ago to today, healing all data gaps without duplicate alerts.
    - **Continuous Live Polling:** Rolls continuously over the active window, alerting breaking news in sub-second latency.
 6. **Unified News Priority & Urgency Scoring:**
@@ -150,7 +150,7 @@ Render reads [`render.yaml`](render.yaml) automatically to configure the web ser
 | `WATCHLIST` | No | 27 tech & US ADR tickers | Comma-separated list of ticker symbols |
 | `POLL_INTERVAL_MS` | No | `2000` | Paced interval between ticker polls (30 req/min) |
 | `MIN_CONFIDENCE` | No | `0.50` | Minimum confidence cutoff (0.0 to 1.0) |
-| `HISTORY_SYNC_DAYS` | No | `365` | Historical lookback window in days for initial sync (1 to 1825) |
+| `HISTORY_SYNC_DAYS` | No | `7` | Historical lookback window in days for initial sync (1 to 1825) |
 | `PORT` | No | `3000` | HTTP port for web dashboard & health check |
 
 ---

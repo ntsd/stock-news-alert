@@ -182,7 +182,7 @@ These optional variables allow you to customize scheduling pace and watchlist sc
 | `WATCHLIST` | 27 tech & ADR tickers | Comma-separated list of symbols (e.g. `AAPL,NVDA,TSLA,MSFT`) |
 | `POLL_INTERVAL_MS` | `2000` | Paced tick interval in ms (2000ms = 30 req/min, free cap: 60/min) |
 | `MIN_CONFIDENCE` | `0.50` | Minimum confidence cutoff to filter out ambiguous headlines |
-| `HISTORY_SYNC_DAYS`| `365` | Lookback window in days for initial historical sync (1 to 1825 days) |
+| `HISTORY_SYNC_DAYS`| `7` | Lookback window in days for initial historical sync (1 to 1825 days) |
 | `PORT` | `3000` | Port for the live web dashboard & health check API |
 | `ENABLE_HEALTH_SERVER` | `true` | Serves dashboard UI and `/health` monitoring route |
 | `NODE_ENV` | `production` | Node execution environment |
@@ -227,7 +227,7 @@ SENTRY_DSN=https://examplePublicKey@o0.ingest.sentry.io/123456
 WATCHLIST=AAPL,MSFT,NVDA,GOOGL,AMZN,META,TSLA,AMD,AVGO,QCOM,TSM,ARM,PLTR,NFLX,CRM,ORCL,COIN,UBER,BABA,TCEHY,BYDDY,BIDU,JD,PDD,NIO,LI
 POLL_INTERVAL_MS=2000
 MIN_CONFIDENCE=0.50
-HISTORY_SYNC_DAYS=365
+HISTORY_SYNC_DAYS=7
 PORT=3000
 ENABLE_HEALTH_SERVER=true
 NODE_ENV=production

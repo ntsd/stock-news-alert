@@ -10,10 +10,10 @@ describe('Environment Configuration & Validation', () => {
     TELEGRAM_CHAT_ID: '123456789',
   };
 
-  it('should default HISTORY_SYNC_DAYS to 365 (1 year)', () => {
+  it('should default HISTORY_SYNC_DAYS to 7 (1 week)', () => {
     const result = envSchema.safeParse(baseValidEnv);
     assert.ok(result.success);
-    assert.equal(result.data.HISTORY_SYNC_DAYS, 365);
+    assert.equal(result.data.HISTORY_SYNC_DAYS, 7);
   });
 
   it('should parse custom HISTORY_SYNC_DAYS within valid range', () => {
