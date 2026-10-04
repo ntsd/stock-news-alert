@@ -2146,7 +2146,8 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
         if (filterStocksOnlyInterest && interestSymbols.length > 0) {
           url += '?symbols=' + encodeURIComponent(interestSymbols.join(','));
         }
-        const res = await fetch(url);
+        const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
+        if (!res.ok) throw new Error('Watchlist telemetry request failed: ' + res.status);
         const data = await res.json();
         const grid = document.getElementById('stocksGrid');
         if (!data.stocks || data.stocks.length === 0) {
@@ -2207,6 +2208,7 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
         }).join('');
       } catch (err) {
         console.error('Error fetching top stocks:', err);
+        document.getElementById('stocksGrid').innerHTML = '<div class="empty-state" style="grid-column: 1/-1;">Watchlist telemetry is temporarily unavailable. Retrying automatically.</div>';
       }
     }
 

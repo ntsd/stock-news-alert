@@ -426,6 +426,26 @@ describe('Web Server & API Endpoints', () => {
     assert.equal((await storage.getPriceCandles('NVDA', '1h')).length, 3);
   });
 
+  it('replaces watchlist loading with a retry message after telemetry failure', async () => {
+    const { raw } = await get('/');
+    const source = raw.slice(raw.indexOf('async function fetchTopStocks()'), raw.indexOf('// Top News on Interest Symbols'));
+    for (const failure of ['http', 'network']) {
+      const grid = { innerHTML: 'Loading watchlist telemetry...' };
+      const context = {
+        filterStocksOnlyInterest: true, interestSymbols: ['AAPL'], AbortSignal,
+        console: { error() {} }, document: { getElementById: () => grid },
+        fetch: async (_url: string, options: { signal: AbortSignal }) => {
+          assert.ok(options.signal);
+          if (failure === 'network') throw new Error('Network unavailable');
+          return { ok: false, status: 500 };
+        },
+      };
+      await runInNewContext(source + 'fetchTopStocks();', context);
+      assert.match(grid.innerHTML, /temporarily unavailable/);
+      assert.ok(!grid.innerHTML.includes('Loading watchlist'));
+    }
+  });
+
   it('rejects unsupported chart ranges and invalid symbols', async () => {
     for (const range of ['30d', '90d', '1y']) {
       assert.equal((await get('/api/chart/NVDA?range=' + range)).status, 400);

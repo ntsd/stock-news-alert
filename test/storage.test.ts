@@ -5,6 +5,24 @@ import type { FinnhubNewsArticle } from '../src/types/finnhub.js';
 import type { JevSentimentResult } from '../src/types/jev.js';
 
 describe('PredictionStorageService (Centralized Prediction Cache)', () => {
+  it('loads only requested equities statistics fields, excluding cached audio', async () => {
+    const storage = new PredictionStorageService();
+    Object.assign(storage, { collection: {
+      find(query: unknown, options: unknown) {
+        assert.deepEqual(query, { symbol: { $in: ['AAPL'] } });
+        assert.deepEqual(options, { projection: {
+          symbol: 1, sentiment: 1, confidence: 1, label: 1, headline: 1, publishedAt: 1,
+        } });
+        return { async toArray() { return [{ symbol: 'AAPL', sentiment: 1, confidence: 0.9,
+          label: 'BULLISH', headline: 'Test', publishedAt: new Date().toISOString() }]; } };
+      },
+    } });
+    const stocks = await storage.getTopStocks(['aapl']);
+    assert.equal(stocks[0]?.totalArticles, 1);
+    assert.equal(stocks[0]?.bullishRatio, 1);
+    assert.equal(stocks[0]?.avgConfidence, 0.9);
+  });
+
   it('fails startup instead of falling back when a configured Mongo URI cannot initialize', async () => {
     const storage = new PredictionStorageService('invalid-mongodb-uri');
     await assert.rejects(storage.init(), /MongoDB initialization failed; refusing to start/);

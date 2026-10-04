@@ -567,7 +567,10 @@ export class PredictionStorageService {
    */
   public async getTopStocks(watchlist: string[]): Promise<StockAggregate[]> {
     const allArticles = this.collection
-      ? await this.collection.find({}).toArray()
+      ? await this.collection.find(
+        watchlist.length ? { symbol: { $in: watchlist.map(s => s.toUpperCase()) } } : {},
+        { projection: { symbol: 1, sentiment: 1, confidence: 1, label: 1, headline: 1, publishedAt: 1 } }
+      ).toArray()
       : Array.from(this.memoryStore.values());
 
     const map = new Map<string, {
