@@ -1,5 +1,6 @@
 # 📈 Zero Market Radar (`zero-market-radar`)
 
+[![Live Demo](https://img.shields.io/badge/Live%20Demo-zeromarketradar.com-6366F1?style=flat&logo=render)](https://zeromarketradar.com)
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.8-blue.svg)](https://www.typescriptlang.org/)
@@ -7,6 +8,8 @@
 
 > **Hacktoberfest Weekend Challenge: Build for a Friend (`#hf26challenge`)**  
 > *Targeted for 4 Challenge Categories: **Best Use of Render**, **Best Use of ElevenLabs**, **Best Use of Sentry Agent Tracing**, and **Best Use of MongoDB Atlas**.*
+
+🌐 **Live at [zeromarketradar.com](https://zeromarketradar.com)** — deployed on Render, open to everyone.
 
 ---
 
@@ -19,7 +22,7 @@ He asked for three things:
 2. *"When I'm commuting or driving, send me a 5-second audio voice dispatch so I don't have to look at my phone."*
 3. *"Give me a live web dashboard where I can see top ranked stocks by bullish sentiment and listen to the news on demand."*
 
-**Zero Market Radar** (`zero-market-radar`) is built to solve exactly that. It runs on **Render**, evaluates news through **TypeSafe AI's Jev** (System 1 non-autoregressive decision model), persists predictions to a centralized **MongoDB Atlas** shared cache, generates audio dispatches via **ElevenLabs**, monitors latency with **Sentry Agent Tracing**, and delivers alerts straight to Alex's Telegram while serving a live Web Dashboard.
+**Zero Market Radar** is built to solve exactly that. It runs on **Render**, evaluates news through **TypeSafe AI's Jev** (System 1 non-autoregressive decision model), persists predictions to a centralized **MongoDB Atlas** shared cache, generates audio dispatches via **ElevenLabs**, monitors latency with **Sentry Agent Tracing**, and delivers alerts straight to Alex's Telegram while serving a live Web Dashboard.
 
 ---
 
@@ -41,12 +44,13 @@ Breaking News Article ──► Jev System 1 Decision ──► Typed Binary Sig
 ```mermaid
 flowchart TD
     subgraph Scheduler ["Deterministic Scheduler & Rate Limiter"]
-        A["Circular Watchlist Queue<br/>27 Tickers: US + HK ADRs"] -->|Paced 2.0s Tick| B["Finnhub News Client"]
+        A["Circular Watchlist Queue<br/>26 Tickers: US + HK ADRs"] -->|Paced 2.0s Tick| B["Finnhub News Client"]
     end
 
-    subgraph External ["Finnhub API (60 req/min Free Cap)"]
+    subgraph External ["Finnhub & Yahoo Finance"]
         B -->|Dynamic Window: 1-Year Sync| C{"Finnhub API"}
         C -->|Articles Array| D["Dual-Eviction LRU Cache<br/>TTL: 48h • Max: 10,000"]
+        B -->|Price History| YF["Yahoo Finance Chart API<br/>24H / 7D / 30D / 90D / 1Y"]
     end
 
     subgraph Storage ["Centralized Prediction Cache (MongoDB Atlas)"]
@@ -75,7 +79,7 @@ flowchart TD
         G -->|HTML Payload| H
         H -.->|If Configured| I["Telegram Bot API: Text + sendVoice"]
         I -.-> J["Instant Alert to User"]
-        K["Web Dashboard & REST API :3000<br/>/api/stocks, /api/top-news, /api/news, /health"] -.->|Keepalive & Telemetry| L["Render Cloud"]
+        K["Web Dashboard & REST API :3000<br/>/api/stocks, /api/top-news, /api/news, /health"] -.->|Keepalive & Telemetry| L["Render Cloud → zeromarketradar.com"]
     end
 ```
 
@@ -83,18 +87,23 @@ flowchart TD
 
 ## 🌐 Live Web Dashboard, Symbol Pages & REST API
 
-The service embeds a dark-mode web application and REST API at `http://localhost:3000`:
+**Live at [zeromarketradar.com](https://zeromarketradar.com)** — deployed on Render.
+
+The service embeds a dark-mode web application and REST API:
+
 * **Dedicated Symbol Pages (`/symbol/:symbol`):**
-  - **Interactive HTML5 Canvas Price Chart:** High-performance responsive chart (`24H`, `7D`, `30D`, `90D`) with gradient area fills and price guidelines.
-  - **Published News Dots on Chart:** Each news publication event is plotted directly on the price line with sentiment-coded markers: 🟢 **Emerald Green** for Bullish signals, 🔴 **Rose Red** for Bearish signals, and a glowing outer halo for 🔥 **Breaking Critical** catalysts.
-  - **Hover Tooltips & Click-to-Jump Navigation:** Hovering over any dot displays an instant frosted glass tooltip with headline, sentiment, impact score, and time. Clicking a dot smoothly scrolls directly to the article with an animated neon flash.
-  - **Symbol News Feed with Client-Side Filters:** Instant filtering by signal (`All`, `Breaking Only`, `Catalysts`, `Bullish`, `Bearish`), sorting (`Latest First`, `Highest Impact`, `Confidence`), and real-time headline search.
+  - **TradingView Lightweight Charts Price Chart:** High-performance interactive chart with `24H`, `7D`, `30D`, `90D`, `1Y` range selector powered by [`lightweight-charts`](https://github.com/tradingview/lightweight-charts).
+  - **Published News Dots on Chart:** Each news publication event is plotted directly on the price line with sentiment-coded overlay markers: 🟢 **Emerald Green** for Bullish signals, 🔴 **Rose Red** for Bearish signals, and a glowing outer halo for 🔥 **Breaking Critical** catalysts.
+  - **Rich Hover Tooltips:** Hovering over any dot opens a frosted-glass tooltip card showing headline, priority badge, sentiment signal, confidence %, impact %, bull/bear probability split, and a click-to-jump CTA. Smart edge-detection flips the tooltip below the dot when near the top of the chart.
+  - **Click-to-Jump Navigation:** Clicking a dot automatically navigates to the correct pagination page and smooth-scrolls to the article with an animated neon highlight flash.
+  - **Unified Filter Bar (Chart + News):** A single filter strip above the chart controls both dot visibility and the news list simultaneously — filter by `All`, `🔥 Breaking`, `⚡ Catalysts`, `🟢 Bullish`, `🔴 Bearish`. Sort by Latest, Highest Urgency, or Confidence. Inline headline search.
+  - **Paginated News Feed (10 per page):** Prevents infinite scroll overload on heavy watchlists. Page navigation resets on every filter or sort change.
 * **Real-Time Price Telemetry:** Watched stocks display live prices, dollar changes, and percent changes fetched via Finnhub `/quote` alongside sentiment telemetry.
 * **Interactive Interest Symbols Filtering:** Multi-select ticker selector with quick presets (Mega Tech, Semis, China/HK ADRs, EV) and instant search, persisted in `localStorage`.
 * **Top Impact News Spotlight:** Dedicated hero spotlight section (`/api/top-news`) highlighting high-urgency catalysts and breaking announcements across your selected interest symbols.
 * **Order by Impact / Urgency:** Sort breaking news by TypeSafe Jev `urgencyScore` (Impact), chronological date, or model confidence.
 * **Dynamic Date Range Filtering:** Quick date range selectors (`3D` default, `24H`, `7D`, `30D`, `1Y`) and custom date range pickers.
-* **ElevenLabs Audio Playback:** Click "🎙 Listen with ElevenLabs" on high-impact cards (`BREAKING_CRITICAL` and `NOTABLE_CATALYST`) to stream voice synthesis directly in the browser with live animated audio waves!
+* **ElevenLabs Audio Playback:** Click "🎙 Listen with ElevenLabs" on high-impact cards (`BREAKING_CRITICAL` and `NOTABLE_CATALYST`) to stream voice synthesis directly in the browser with live animated audio waves.
 * **Render Telemetry:** Live health status (`/health`), rate-limit consumption (~27 req/min), and cache hit metrics.
 
 ---
@@ -103,24 +112,24 @@ The service embeds a dark-mode web application and REST API at `http://localhost
 
 1. **Guaranteed Finnhub Rate Limit Compliance & 1-Minute Poller Cycle:**
    - Free tier limit is 60 requests/minute.
-   - Paced scheduler ticks at `2,200ms` (~27 req/min across 27 tickers = 59.4s full cycle per symbol), fetching both real-time price quotes and company news continuously without exceeding API caps.
+   - Paced scheduler ticks at `2,000ms` (~30 req/min across 26 tickers), fetching both real-time price quotes and company news continuously without exceeding API caps.
 2. **Centralized MongoDB Shared Cache & Startup Warm-Up:**
-   - On boot, loads recent article IDs directly into the in-memory LRU cache (`getRecentArticleIds`), guaranteeing zero duplicate alerts across container restarts or Render redeployments.
+   - On boot, loads recent article IDs directly into the in-memory LRU cache, guaranteeing zero duplicate alerts across container restarts or Render redeployments.
    - Predictions and synthesized ElevenLabs MP3 binaries are persisted in MongoDB Atlas, sharing model decisions and audio buffers across instances.
    - Falls back gracefully to an in-memory store if `MONGODB_URI` is omitted.
 3. **ElevenLabs Voice Alerts via Telegram `sendVoice`:**
-   - High-confidence alerts generate audio broadcasts via ElevenLabs' low-latency `eleven_turbo_v2_5` model, sent as voice memos with HTML captions.
+   - High-confidence alerts (`BREAKING_CRITICAL` and `NOTABLE_CATALYST` only) generate audio broadcasts via ElevenLabs' low-latency `eleven_turbo_v2_5` model, sent as voice memos with HTML captions.
 4. **Sentry Agent Tracing:**
    - Instruments OpenTelemetry trace spans across Jev decisions, Finnhub polling, and ElevenLabs audio generation to monitor decision latency and token efficiency.
 5. **Dynamic Incremental Sync & Historical Backfill (`HISTORY_SYNC_DAYS`):**
-   - **First Run:** Queries Finnhub for the past 7 days (configurable via `HISTORY_SYNC_DAYS`, default 7 days) of news across each ticker, smartly seeds recent catalysts with Jev, and populates the historical dashboard overview silently.
-   - **Subsequent Runs (e.g. After Downtime):** Tracks `lastSyncDate` per symbol in MongoDB Atlas (`sync_metadata` collection). If the bot was offline for 10 days, on startup it automatically queries from 10 days ago to today, healing all data gaps without duplicate alerts.
+   - **First Run:** Queries Finnhub for the past 7 days (configurable via `HISTORY_SYNC_DAYS`, default 7) of news across each ticker, seeds Jev predictions, and populates the dashboard silently.
+   - **Subsequent Runs:** Tracks `lastSyncDate` per symbol in MongoDB. If the bot was offline for 10 days, on startup it automatically queries from 10 days ago to today, healing all data gaps without duplicate alerts.
    - **Continuous Live Polling:** Rolls continuously over the active window, alerting breaking news in sub-second latency.
 6. **Unified News Priority & Urgency Scoring:**
    - TypeSafe Jev evaluates a unified multi-choice `news_priority` decision alongside directional sentiment in a single sub-second evaluation:
      - `BREAKING_CRITICAL`: Unscheduled, high-volatility events (earnings surprises, CEO resignations, regulatory bans) trigger urgent push alerts and ElevenLabs audio broadcasts.
      - `NOTABLE_CATALYST`: Business updates, analyst upgrades/downgrades, and partnerships trigger standard alerts.
-     - `ROUTINE_NOISE`: General commentary, opinion columns, and retrospective wrap-ups are safely filtered out of push alerts to prevent notification fatigue while staying searchable on the dashboard.
+     - `ROUTINE_NOISE`: General commentary, opinion columns, and retrospective wrap-ups are safely filtered out of push alerts while staying searchable on the dashboard.
      - Continuous `urgencyScore` ($0.0 - 1.0$) ranks top news across all watchlists.
 7. **Outbound Telegram Throttling with Strict HTML Escaping:**
    - Strict HTML escaping for `&`, `<`, and `>` ensures messages never fail on ticker symbols or financial punctuation (e.g. `AT&T`, `S&P 500`, `P/E > 25`).
@@ -129,7 +138,9 @@ The service embeds a dark-mode web application and REST API at `http://localhost
 
 ## 🚀 Deployment to Render
 
-Deploy this service directly to Render with one click:
+The live service runs at **[zeromarketradar.com](https://zeromarketradar.com)**.
+
+Deploy your own instance directly to Render with one click:
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy)
 
@@ -152,7 +163,7 @@ Render reads [`render.yaml`](render.yaml) automatically to configure the web ser
 | `ELEVENLABS_VOICE_ID` | No | `pNInz6obpgDQGcFmaJgB` | ElevenLabs Voice ID (Adam - financial broadcast) |
 | `ENABLE_VOICE_ALERTS`| No | `true` | Enables ElevenLabs voice note alerts in Telegram |
 | `SENTRY_DSN` | No | — | Sentry DSN for Agent Tracing & performance monitoring |
-| `WATCHLIST` | No | 27 tech & US ADR tickers | Comma-separated list of ticker symbols |
+| `WATCHLIST` | No | 26 tech & US ADR tickers | Comma-separated list of ticker symbols |
 | `POLL_INTERVAL_MS` | No | `2000` | Paced interval between ticker polls (30 req/min) |
 | `MIN_CONFIDENCE` | No | `0.50` | Minimum confidence cutoff (0.0 to 1.0) |
 | `HISTORY_SYNC_DAYS` | No | `7` | Historical lookback window in days for initial sync (1 to 1825) |
