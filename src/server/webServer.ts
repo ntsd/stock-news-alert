@@ -37,7 +37,7 @@ export function createWebServer(options: WebServerOptions): http.Server {
           JSON.stringify(
             {
               status: stats.isRunning ? 'healthy' : 'stopped',
-              service: 'zero-market-sentinel',
+              service: 'zero-market-radar',
               uptimeSeconds: Math.floor(process.uptime()),
               timestamp: new Date().toISOString(),
               stats,
@@ -205,7 +205,7 @@ export function createWebServer(options: WebServerOptions): http.Server {
   });
 
   server.listen(port, () => {
-    console.log(`🌐 [Web] Zero Market Sentinel Dashboard & API active at http://localhost:${port}`);
+    console.log(`🌐 [Web] Zero Market Radar Dashboard & API active at http://localhost:${port}`);
   });
 
   return server;
@@ -218,8 +218,8 @@ function renderDashboardHtml(defaultWatchlist: string[]): string {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Zero Market Sentinel | System 1 AI Financial Terminal</title>
-  <meta name="description" content="Sub-second stock news sentiment & urgency analysis powered by Zero Market Sentinel, TypeSafe AI Jev, ElevenLabs, MongoDB Atlas, and Render.">
+  <title>Zero Market Radar | System 1 AI Financial Terminal</title>
+  <meta name="description" content="Sub-second stock news sentiment & urgency analysis powered by Zero Market Radar, TypeSafe AI Jev, ElevenLabs, MongoDB Atlas, and Render.">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📈</text></svg>">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -1051,7 +1051,7 @@ function renderDashboardHtml(defaultWatchlist: string[]): string {
       <div class="brand">
         <div class="brand-icon">📈</div>
         <div>
-          <h1>Zero Market Sentinel</h1>
+          <h1>Zero Market Radar</h1>
           <p>System 1 AI Financial Terminal powered by TypeSafe Jev, ElevenLabs & Render</p>
         </div>
       </div>
@@ -1059,7 +1059,7 @@ function renderDashboardHtml(defaultWatchlist: string[]): string {
         <div class="status-badges">
           <div class="badge badge-live">
             <div class="pulse-dot"></div>
-            Live Sentinel Active
+            Live Radar Active
           </div>
           <div class="badge">Finnhub Paced (30/m)</div>
           <div class="badge">TypeSafe Jev: Sub-Second</div>
@@ -1194,7 +1194,7 @@ function renderDashboardHtml(defaultWatchlist: string[]): string {
 
   <script>
     const ALL_SYMBOLS = ${watchlistJson};
-    const STORAGE_KEY = 'zero_market_sentinel_interest_symbols';
+    const STORAGE_KEY = 'zero_market_radar_interest_symbols';
     
     // Curated Presets
     const PRESETS = {
@@ -1223,7 +1223,7 @@ function renderDashboardHtml(defaultWatchlist: string[]): string {
 
     function loadInterestSymbols() {
       try {
-        const stored = localStorage.getItem(STORAGE_KEY) || localStorage.getItem('stock_news_interest_symbols');
+        const stored = localStorage.getItem(STORAGE_KEY) || localStorage.getItem('zero_market_sentinel_interest_symbols') || localStorage.getItem('stock_news_interest_symbols');
         if (stored) {
           const parsed = JSON.parse(stored);
           if (Array.isArray(parsed) && parsed.length > 0) {

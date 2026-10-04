@@ -10,7 +10,7 @@ import { NewsAlertPoller } from './scheduler/poller.js';
 import { createWebServer } from './server/webServer.js';
 
 console.log('=====================================================');
-console.log('📈 Starting Zero Market Sentinel Production Service');
+console.log('📈 Starting Zero Market Radar Production Service');
 console.log(`🌍 Environment: ${config.nodeEnv}`);
 console.log(`📋 Watchlist: [${config.watchlist.join(', ')}]`);
 console.log(`🎯 Min Confidence Filter: ${config.minConfidence * 100}%`);

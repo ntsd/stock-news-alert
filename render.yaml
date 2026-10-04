@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: zero-market-sentinel
+    name: zero-market-radar
     runtime: node
     plan: free
     buildCommand: npm install && npm run build

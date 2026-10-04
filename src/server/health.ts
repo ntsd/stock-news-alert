@@ -16,7 +16,7 @@ export function createHealthServer(options: HealthServerOptions): http.Server {
       const stats = getStats();
       const responsePayload = {
         status: stats.isRunning ? 'healthy' : 'stopped',
-        service: 'zero-market-sentinel',
+        service: 'zero-market-radar',
         uptimeSeconds: Math.floor(process.uptime()),
         timestamp: new Date().toISOString(),
         stats,

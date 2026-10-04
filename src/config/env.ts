@@ -117,7 +117,7 @@ export const envSchema = z.object({
   MONGODB_DATABASE: z
     .string()
     .optional()
-    .default('zero_market_sentinel'),
+    .default('zero_market_radar'),
 });
 
 export function loadAndValidateConfig(): AppConfig {

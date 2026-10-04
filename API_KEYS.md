@@ -1,6 +1,6 @@
 # 🔑 API Keys & Environment Configuration Guide
 
-This guide provides step-by-step walkthroughs for obtaining and configuring all API keys and environment variables used by **`zero-market-sentinel` (Zero Market Sentinel)**.
+This guide provides step-by-step walkthroughs for obtaining and configuring all API keys and environment variables used by **`zero-market-radar` (Zero Market Radar)**.
 
 ---
 
@@ -71,8 +71,8 @@ Configure Telegram to receive instant push alerts and ElevenLabs audio voice mem
 1. Open the Telegram app and search for `@BotFather` (verified bot with blue checkmark).
 2. Click **Start** or send `/start`.
 3. Send `/newbot`.
-4. Choose a display name for your bot (e.g. `Alex Zero Market Sentinel`).
-5. Choose a unique username ending in `bot` (e.g. `alex_zero_market_sentinel_bot`).
+4. Choose a display name for your bot (e.g. `Alex Zero Market Radar`).
+5. Choose a unique username ending in `bot` (e.g. `alex_zero_market_radar_bot`).
 6. `@BotFather` will reply with your HTTP API token formatted like:
    `123456789:ABCdefGhIJKlmNoPQRsTUVwxyZ`
 7. Set it in your `.env`:
@@ -149,7 +149,7 @@ MongoDB Atlas stores shared prediction weights, restart deduplication checkpoint
 6. Set it in your `.env`:
    ```bash
    MONGODB_URI=mongodb+srv://admin:MySecurePass123@cluster0.xxxx.mongodb.net/?retryWrites=true&w=majority
-   MONGODB_DATABASE=zero_market_sentinel
+   MONGODB_DATABASE=zero_market_radar
    ```
 
 ---
@@ -216,7 +216,7 @@ ENABLE_VOICE_ALERTS=true
 
 # MongoDB Atlas Centralized Cache
 MONGODB_URI=mongodb+srv://username:password@cluster0.xxxx.mongodb.net/?retryWrites=true&w=majority
-MONGODB_DATABASE=zero_market_sentinel
+MONGODB_DATABASE=zero_market_radar
 
 # Sentry Agent Tracing
 SENTRY_DSN=https://examplePublicKey@o0.ingest.sentry.io/123456
