@@ -10,11 +10,12 @@ describe('Environment Configuration & Validation', () => {
     TELEGRAM_CHAT_ID: '123456789',
   };
 
-  it('defaults to the exact 16-symbol watchlist', () => {
+  it('defaults to the exact 27-symbol watchlist', () => {
     const result = envSchema.parse(baseValidEnv);
     assert.deepEqual(result.WATCHLIST, [
       'AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN', 'META', 'TSLA', 'AMD',
-      'TSM', 'PLTR', 'NFLX', 'BABA', 'TCEHY', 'BYDDY', 'PDD', 'XIACY',
+      'AVGO', 'QCOM', 'TSM', 'ARM', 'PLTR', 'NFLX', 'CRM', 'ORCL', 'COIN', 'UBER',
+      'BABA', 'TCEHY', 'BYDDY', 'BIDU', 'JD', 'PDD', 'NIO', 'LI', 'XIACY',
     ]);
   });
 
@@ -27,20 +28,23 @@ describe('Environment Configuration & Validation', () => {
   it('should parse custom HISTORY_SYNC_DAYS within valid range', () => {
     const result = envSchema.safeParse({
       ...baseValidEnv,
-      HISTORY_SYNC_DAYS: '90',
+      HISTORY_SYNC_DAYS: '3',
     });
     assert.ok(result.success);
-    assert.equal(result.data.HISTORY_SYNC_DAYS, 90);
+    assert.equal(result.data.HISTORY_SYNC_DAYS, 3);
 
     const fiveYearResult = envSchema.safeParse({
       ...baseValidEnv,
-      HISTORY_SYNC_DAYS: '1825',
+      HISTORY_SYNC_DAYS: '7',
     });
     assert.ok(fiveYearResult.success);
-    assert.equal(fiveYearResult.data.HISTORY_SYNC_DAYS, 1825);
+    assert.equal(fiveYearResult.data.HISTORY_SYNC_DAYS, 7);
   });
 
   it('should reject invalid HISTORY_SYNC_DAYS values', () => {
+    for (const value of ['8', '365', '1.5', '7days', '']) {
+      assert.equal(envSchema.safeParse({ ...baseValidEnv, HISTORY_SYNC_DAYS: value }).success, false);
+    }
     // 0 is invalid (< 1 day)
     const zeroResult = envSchema.safeParse({
       ...baseValidEnv,

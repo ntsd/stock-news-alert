@@ -21,6 +21,7 @@ export interface StoredArticle {
   };
   rawChoice: 'bullish' | 'bearish';
   createdAt: string;
+  evaluatedBy?: 'jev'; // Absent on legacy records that may contain baseline placeholders.
   audioBase64?: string; // Cached ElevenLabs MP3
 
   // Unified Priority & Urgency
@@ -50,6 +51,7 @@ export interface SyncMetadata {
   // UTC dates (YYYY-MM-DD); absent on legacy timestamp-only records.
   syncedFrom?: string;
   syncedTo?: string;
+  evaluatedAll?: boolean; // All articles in the latest sync window received genuine inference.
 }
 
 export interface PriceHistoryMetadata {
@@ -181,13 +183,13 @@ export class PredictionStorageService {
     return traceSpan('mongo.get_recent_article_ids', 'db.read', { limit }, async () => {
       if (this.collection) {
         const docs = await this.collection
-          .find({}, { projection: { _id: 1 } })
+          .find({ evaluatedBy: 'jev' }, { projection: { _id: 1 } })
           .sort({ publishedAt: -1 })
           .limit(limit)
           .toArray();
         return docs.map((doc) => doc._id);
       }
-      return Array.from(this.memoryStore.keys()).slice(0, limit);
+      return Array.from(this.memoryStore.values()).filter(doc => doc.evaluatedBy === 'jev').slice(0, limit).map(doc => doc._id);
     });
   }
 
@@ -213,7 +215,8 @@ export class PredictionStorageService {
     syncedFrom: string,
     syncedTo: string,
     articlesCount = 0,
-    date: Date = new Date()
+    date: Date = new Date(),
+    evaluatedAll = false
   ): Promise<void> {
     const sym = symbol.toUpperCase();
 
@@ -226,6 +229,7 @@ export class PredictionStorageService {
               _id: sym,
               lastSyncedAt: date.toISOString(),
               articlesCount,
+              ...(evaluatedAll ? { evaluatedAll: true } : {}),
             },
             $min: { syncedFrom },
             $max: { syncedTo },
@@ -242,6 +246,7 @@ export class PredictionStorageService {
       articlesCount,
       syncedFrom: previous?.syncedFrom && previous.syncedFrom < syncedFrom ? previous.syncedFrom : syncedFrom,
       syncedTo: previous?.syncedTo && previous.syncedTo > syncedTo ? previous.syncedTo : syncedTo,
+      ...(evaluatedAll || previous?.evaluatedAll ? { evaluatedAll: true } : {}),
     });
   }
 
@@ -405,6 +410,7 @@ export class PredictionStorageService {
       probabilities: classification.probabilities,
       rawChoice: classification.rawChoice,
       createdAt: new Date().toISOString(),
+      evaluatedBy: 'jev',
       priority: classification.priority,
       priorityConfidence: classification.priorityConfidence,
       isBreaking: classification.isBreaking,

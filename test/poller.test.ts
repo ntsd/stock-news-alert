@@ -26,7 +26,7 @@ function article(id: number, date: string): FinnhubNewsArticle {
   };
 }
 
-function setup(t: TestContext, storage = new PredictionStorageService(), historySyncDays = 365) {
+function setup(t: TestContext, storage = new PredictionStorageService(), historySyncDays = 7) {
   const finnhub = new FinnhubClient('test');
   const jev = new JevClassificationService('test');
   const telegram = new TelegramAlertService('test', 'test');
@@ -49,7 +49,7 @@ describe('Breaking-only Telegram voice', () => {
   for (const priority of ['BREAKING_CRITICAL', 'NOTABLE_CATALYST'] as const) {
     it(`delivers ${priority} via the correct voice or text channel`, async (t) => {
       const storage = new PredictionStorageService();
-      await storage.setSyncRange('AAPL', '2025-01-01', new Date().toISOString().split('T')[0]!);
+      await storage.setSyncRange('AAPL', '2025-01-01', new Date().toISOString().split('T')[0]!, 0, new Date(), true);
       const s = setup(t, storage);
       const elevenlabs = new ElevenLabsService('test');
       Object.assign(s.poller, { enableVoiceAlerts: true, elevenlabsService: elevenlabs });
@@ -88,6 +88,42 @@ describe('NewsAlertPoller scheduling', () => {
 });
 
 describe('NewsAlertPoller sync coverage', () => {
+  it('evaluates every historical article, repairs legacy labels, and stays silent', async (t) => {
+    t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-10-05T12:00:00Z') });
+    const s = setup(t, undefined, 365); // Constructor also caps direct callers.
+    const articles = Array.from({ length: 6 }, (_, i) => article(i + 100, '2026-10-04'));
+    await s.storage.savePrediction(articles[0]!, result);
+    const legacy = await s.storage.getCachedPrediction(100);
+    delete legacy!.evaluatedBy;
+    await s.storage.setSyncRange('AAPL', '2025-10-05', '2026-10-05');
+    s.fetchNews.mock.mockImplementation(async () => articles);
+    await s.tick();
+    assert.deepEqual(s.fetchNews.mock.calls[0]?.arguments, ['AAPL', '2026-09-28', '2026-10-05']);
+    assert.equal(s.classify.mock.callCount(), 6);
+    assert.equal(s.sendAlert.mock.callCount(), 0);
+    for (const item of articles) {
+      assert.equal((await s.storage.getCachedPrediction(item.id))?.evaluatedBy, 'jev');
+    }
+    assert.equal((await s.storage.getSyncMetadata('AAPL'))?.evaluatedAll, true);
+    await s.tick();
+    assert.equal(s.classify.mock.callCount(), 6);
+  });
+
+  it('retries failed historical inference without storing placeholders or advancing coverage', async (t) => {
+    const s = setup(t);
+    s.fetchNews.mock.mockImplementation(async () => [article(200, new Date().toISOString()), article(201, new Date().toISOString())]);
+    s.classify.mock.mockImplementationOnce(async () => { throw new Error('Jev unavailable'); });
+    await s.tick();
+    assert.equal(await s.storage.getCachedPrediction(200), null);
+    assert.ok(await s.storage.getCachedPrediction(201));
+    assert.equal(await s.storage.getSyncMetadata('AAPL'), null);
+    await s.tick();
+    assert.ok(await s.storage.getCachedPrediction(200));
+    assert.equal(s.classify.mock.callCount(), 3);
+    assert.equal(s.sendAlert.mock.callCount(), 0);
+    assert.equal((await s.storage.getSyncMetadata('AAPL'))?.evaluatedAll, true);
+  });
+
   it('archives watched daily prices without dashboard traffic and still processes news if prices fail', async (t) => {
     const s = setup(t);
     const calls: string[] = [];
@@ -100,7 +136,7 @@ describe('NewsAlertPoller sync coverage', () => {
     assert.equal(s.fetchNews.mock.callCount(), 1);
     assert.ok(await s.storage.getSyncMetadata('AAPL'));
   });
-  it('backfills only missing older history after changing 3 days to 365 on restart', async (t) => {
+  it('backfills only missing older history after changing 3 days to 7 on restart', async (t) => {
     t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-10-05T12:00:00Z') });
     const initial = setup(t, undefined, 3);
     initial.fetchNews.mock.mockImplementation(async () => [article(1, '2026-10-02')]);
@@ -108,11 +144,11 @@ describe('NewsAlertPoller sync coverage', () => {
     assert.deepEqual(initial.fetchNews.mock.calls[0]?.arguments, ['AAPL', '2026-10-02', '2026-10-05']);
 
     const restarted = setup(t, initial.storage);
-    restarted.fetchNews.mock.mockImplementation(async () => [article(1, '2026-10-02'), article(2, '2025-10-06')]);
+    restarted.fetchNews.mock.mockImplementation(async () => [article(1, '2026-10-02'), article(2, '2026-09-29')]);
     await restarted.tick();
-    assert.deepEqual(restarted.fetchNews.mock.calls[0]?.arguments, ['AAPL', '2025-10-05', '2026-10-02']);
+    assert.deepEqual(restarted.fetchNews.mock.calls[0]?.arguments, ['AAPL', '2026-09-28', '2026-10-02']);
     const metadata = await restarted.storage.getSyncMetadata('AAPL');
-    assert.equal(metadata?.syncedFrom, '2025-10-05');
+    assert.equal(metadata?.syncedFrom, '2026-09-28');
     assert.equal(metadata?.syncedTo, '2026-10-05');
     assert.ok(await restarted.storage.getCachedPrediction(2));
     assert.equal(restarted.classify.mock.callCount(), 1); // Cached article 1 is reused.
@@ -126,8 +162,8 @@ describe('NewsAlertPoller sync coverage', () => {
     t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-10-05T12:00:00Z') });
     const s = setup(t);
     await s.tick();
-    assert.deepEqual(s.fetchNews.mock.calls[0]?.arguments, ['AAPL', '2025-10-05', '2026-10-05']);
-    assert.equal((await s.storage.getSyncMetadata('AAPL'))?.syncedFrom, '2025-10-05');
+    assert.deepEqual(s.fetchNews.mock.calls[0]?.arguments, ['AAPL', '2026-09-28', '2026-10-05']);
+    assert.equal((await s.storage.getSyncMetadata('AAPL'))?.syncedFrom, '2026-09-28');
     await s.tick();
     assert.deepEqual(s.fetchNews.mock.calls[1]?.arguments, ['AAPL', '2026-10-04', '2026-10-05']);
   });
@@ -139,17 +175,17 @@ describe('NewsAlertPoller sync coverage', () => {
       _id: 'AAPL', lastSyncedAt: '2026-10-05T11:00:00Z', articlesCount: 10,
     }));
     await s.tick();
-    assert.deepEqual(s.fetchNews.mock.calls[0]?.arguments, ['AAPL', '2025-10-05', '2026-10-05']);
+    assert.deepEqual(s.fetchNews.mock.calls[0]?.arguments, ['AAPL', '2026-09-28', '2026-10-05']);
     assert.equal(s.sendAlert.mock.callCount(), 0);
   });
 
   it('keeps wider coverage when reducing history and catches up downtime on the next tick', async (t) => {
     t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-10-05T12:00:00Z') });
     const storage = new PredictionStorageService();
-    await storage.setSyncRange('AAPL', '2025-10-05', '2026-09-25');
+    await storage.setSyncRange('AAPL', '2025-10-05', '2026-09-25', 0, new Date(), true);
     const s = setup(t, storage, 3);
     await s.tick();
-    assert.deepEqual(s.fetchNews.mock.calls[0]?.arguments, ['AAPL', '2026-09-24', '2026-10-05']);
+    assert.deepEqual(s.fetchNews.mock.calls[0]?.arguments, ['AAPL', '2026-10-02', '2026-10-05']);
     assert.equal((await storage.getSyncMetadata('AAPL'))?.syncedFrom, '2025-10-05');
     assert.equal((await storage.getSyncMetadata('AAPL'))?.syncedTo, '2026-10-05');
   });
@@ -157,31 +193,31 @@ describe('NewsAlertPoller sync coverage', () => {
   it('does not advance history coverage after failed fetches or storage writes, and retries', async (t) => {
     t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-10-05T12:00:00Z') });
     const storage = new PredictionStorageService();
-    await storage.setSyncRange('AAPL', '2026-10-02', '2026-10-05');
+    await storage.setSyncRange('AAPL', '2026-10-02', '2026-10-05', 0, new Date(), true);
     const before = await storage.getSyncMetadata('AAPL');
     const s = setup(t, storage);
     s.fetchNews.mock.mockImplementationOnce(async () => { throw new Error('Fetch failed'); });
     await s.tick();
     assert.deepEqual(await storage.getSyncMetadata('AAPL'), before);
 
-    s.fetchNews.mock.mockImplementation(async () => [article(3, '2025-10-06')]);
+    s.fetchNews.mock.mockImplementation(async () => [article(3, '2026-09-29')]);
     const save = t.mock.method(storage, 'savePrediction', async () => { throw new Error('Write failed'); });
     await s.tick();
     assert.deepEqual(await storage.getSyncMetadata('AAPL'), before);
     save.mock.restore();
     await s.tick();
-    assert.equal((await storage.getSyncMetadata('AAPL'))?.syncedFrom, '2025-10-05');
+    assert.equal((await storage.getSyncMetadata('AAPL'))?.syncedFrom, '2026-09-28');
     assert.ok(await storage.getCachedPrediction(3));
     assert.equal(s.sendAlert.mock.callCount(), 0);
     for (const call of s.fetchNews.mock.calls) {
-      assert.deepEqual(call.arguments, ['AAPL', '2025-10-05', '2026-10-02']);
+      assert.deepEqual(call.arguments, ['AAPL', '2026-09-28', '2026-10-02']);
     }
   });
 
   it('retries failed live storage writes without skipping articles in the deduplicator', async (t) => {
     t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-10-05T12:00:00Z') });
     const storage = new PredictionStorageService();
-    await storage.setSyncRange('AAPL', '2025-10-05', '2026-10-04');
+    await storage.setSyncRange('AAPL', '2025-10-05', '2026-10-04', 0, new Date(), true);
     const before = await storage.getSyncMetadata('AAPL');
     const s = setup(t, storage);
     s.fetchNews.mock.mockImplementation(async () => [article(4, '2026-10-05T11:00:00Z')]);

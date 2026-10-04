@@ -47,6 +47,8 @@ TypeSafe AI provides **Jev**: a System 1 non-autoregressive decision model that 
 * **Cost:** Free Developer Tier.
 * **Used for:** Directional sentiment evaluation and multi-choice `news_priority` urgency scoring.
 
+All fetched uncached articles, whether live or historical, use the same genuine Jev evaluation path; no fake baseline or fake error fallback is stored. The first rollout silently re-fetches the configured recent news window and re-evaluates legacy predictions without `evaluatedBy: 'jev'`, even previously genuine Jev results whose provenance was absent. This one-time re-evaluation may incur paid Jev usage beyond the free allowance.
+
 ### How to Get It:
 1. Navigate to [typesafe.ai](https://typesafe.ai).
 2. Sign in or register for developer access.
@@ -131,6 +133,8 @@ MongoDB Atlas stores shared prediction weights, restart deduplication checkpoint
 * **Used for:** Zero duplicate alerts across container restarts, downtime backfill tracking, and shared web cache.
 * **Note:** If omitted, the service falls back automatically to an internal in-memory store.
 
+Stored Jev predictions carry `evaluatedBy: 'jev'`; sync metadata uses `evaluatedAll: true` to mark fully evaluated coverage. Historical sync sends no Telegram alerts or automatic voice dispatches. Fetch or evaluation failures are retried without advancing the sync checkpoint. Older MongoDB news and prices are retained: the recent-news limit adds no TTL or deletion, and full price archiving for future backtests is unchanged.
+
 ### How to Get It:
 1. Navigate to [mongodb.com/cloud/atlas](https://www.mongodb.com/cloud/atlas) and sign up.
 2. Create a new cluster and select the **M0 Free** tier.
@@ -179,13 +183,17 @@ These optional variables allow you to customize scheduling pace and watchlist sc
 
 | Variable | Default | Description |
 | :--- | :---: | :--- |
-| `WATCHLIST` | 16 tech & ADR tickers | Comma-separated list of symbols (e.g. `AAPL,NVDA,TSLA,MSFT`) |
+| `WATCHLIST` | 27 tech & ADR tickers | Comma-separated list of symbols (e.g. `AAPL,NVDA,TSLA,MSFT`) |
 | `POLL_INTERVAL_MS` | `2000` | Paced tick interval in ms (2000ms = 30 req/min, free cap: 60/min) |
 | `MIN_CONFIDENCE` | `0.50` | Minimum confidence cutoff to filter out ambiguous headlines |
-| `HISTORY_SYNC_DAYS`| `7` | Lookback window in days for initial historical sync (1 to 1825 days) |
+| `HISTORY_SYNC_DAYS`| `7` | Recent news sync lookback (integer 1–7 days); scheduler caps lookback at seven days even after downtime. Price history and archive retention are unaffected. |
 | `PORT` | `3000` | Port for the live web dashboard & health check API |
 | `ENABLE_HEALTH_SERVER` | `true` | Serves dashboard UI and `/health` monitoring route |
 | `NODE_ENV` | `production` | Node execution environment |
+
+News UI presets are `24H`, `3D` (default), and `7D`, with `Custom` restricted to the most recent seven days. Price chart ranges remain `24H`, `7D`, `30D`, `90D`, and `1Y`, independent of the news limit.
+
+**Render deployment:** Set or override `HISTORY_SYNC_DAYS=7` in the service's environment settings. Existing values above 7 must be changed to an integer from 1 to 7 before deploying; a default does not replace an existing environment override. Budget for possible paid one-time Jev re-evaluation of unmarked recent predictions during the silent first-rollout sync.
 
 ---
 
@@ -224,7 +232,7 @@ SENTRY_DSN=https://examplePublicKey@o0.ingest.sentry.io/123456
 # =====================================================
 # OPERATIONAL TUNING
 # =====================================================
-WATCHLIST=AAPL,MSFT,NVDA,GOOGL,AMZN,META,TSLA,AMD,TSM,PLTR,NFLX,BABA,TCEHY,BYDDY,PDD,XIACY
+WATCHLIST=AAPL,MSFT,NVDA,GOOGL,AMZN,META,TSLA,AMD,AVGO,QCOM,TSM,ARM,PLTR,NFLX,CRM,ORCL,COIN,UBER,BABA,TCEHY,BYDDY,BIDU,JD,PDD,NIO,LI,XIACY
 POLL_INTERVAL_MS=2000
 MIN_CONFIDENCE=0.50
 HISTORY_SYNC_DAYS=7

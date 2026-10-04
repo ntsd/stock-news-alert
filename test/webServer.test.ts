@@ -204,15 +204,14 @@ describe('Web Server & API Endpoints', () => {
 
   it('should support date range filtering at /api/news?fromDate=...&toDate=...', async () => {
     const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-    const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-    const res = await get(`/api/news?fromDate=${yesterday}&toDate=${tomorrow}`);
+    const today = new Date().toISOString().split('T')[0];
+    const res = await get(`/api/news?fromDate=${yesterday}&toDate=${today}`);
     assert.equal(res.status, 200);
     assert.ok(res.data.news.length >= 2);
 
-    // Old date range should yield 0 results
+    // Old date ranges are outside the public news window.
     const pastRes = await get('/api/news?fromDate=2020-01-01&toDate=2020-01-02');
-    assert.equal(pastRes.status, 200);
-    assert.equal(pastRes.data.news.length, 0);
+    assert.equal(pastRes.status, 400);
   });
 
   it('paginates the full filtered news feed and identifies the last page', async () => {
@@ -226,6 +225,46 @@ describe('Web Server & API Endpoints', () => {
     const empty = await get('/api/news?limit=1&offset=3');
     assert.deepEqual(empty.data.news, []);
     assert.equal(empty.data.hasMore, false);
+  });
+
+  it('validates seven-day news dates on both feeds, including omitted bounds', async () => {
+    const today = new Date().toISOString().slice(0, 10);
+    const earliest = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
+    const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+    for (const endpoint of ['/api/news', '/api/top-news']) {
+      assert.equal((await get(`${endpoint}?fromDate=${earliest}&toDate=${today}`)).status, 200);
+      for (const query of ['fromDate=invalid', 'fromDate=2026-02-30', 'fromDate=2020-01-01',
+        `toDate=${tomorrow}`, `fromDate=${today}&toDate=${earliest}`]) {
+        assert.equal((await get(`${endpoint}?${query}`)).status, 400, query);
+      }
+    }
+  });
+
+  it('restricts custom news dates and guards invalid presets in the browser', async () => {
+    const res = await get('/');
+    const source = res.raw.slice(res.raw.indexOf('function getDateParams()'), res.raw.indexOf('function onSortChange'));
+    const inputs: Record<string, any> = {
+      fromDateInput: { value: '', checkValidity: () => true },
+      toDateInput: { value: '', checkValidity: () => true },
+      customDateInputs: { classList: { toggle: () => true, remove() {} } },
+    };
+    const context: any = {
+      document: { getElementById: (id: string) => inputs[id], querySelectorAll: () => [] },
+      fetchTopNews() {}, fetchNews() { context.fetches++; }, alert() { context.alerts++; }, fetches: 0, alerts: 0,
+    };
+    runInNewContext(`let dateRangeDays = 3, customFromDate = '', customToDate = ''; ${source}
+      toggleCustomDatePicker({ classList: { add() {} } });
+      applyCustomDateRange();
+      setDateRangePreset(30);
+      selectedDays = dateRangeDays;
+      document.getElementById('fromDateInput').value = '2020-01-01';
+      applyCustomDateRange();
+    `, context);
+    assert.equal(inputs.fromDateInput.min, new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10));
+    assert.equal(inputs.toDateInput.max, new Date().toISOString().slice(0, 10));
+    assert.equal(context.selectedDays, 0);
+    assert.equal(context.fetches, 1);
+    assert.equal(context.alerts, 1);
   });
 
   it('rejects invalid pagination arguments', async () => {
@@ -242,6 +281,8 @@ describe('Web Server & API Endpoints', () => {
     assert.ok(res.raw.includes('Top Impact News on Watched Symbols'));
     assert.ok(res.raw.includes('Highest Impact (Urgency Score)'));
     assert.ok(res.raw.includes('3D (Default)'));
+    assert.ok(!res.raw.includes('data-days="30"'));
+    assert.ok(!res.raw.includes('data-days="365"'));
     assert.ok(res.raw.includes('aria-label="News feed pagination"'));
     assert.match(res.raw, /#priceChartContainer\s*\{[^}]*z-index: 0;/);
     assert.match(res.raw, /\.news-dot-layer\s*\{[^}]*z-index: 3;/);
@@ -308,6 +349,35 @@ describe('Web Server & API Endpoints', () => {
     assert.equal(context.remaining, 0);
   });
 
+  it('configures real Lightweight Charts time labels and preserves them on refresh', async () => {
+    const res = await get('/');
+    const source = res.raw.slice(res.raw.indexOf('let priceChart = null;'), res.raw.indexOf('function showNewsDotTooltip'));
+    const container = { clientWidth: 800, clientHeight: 380 };
+    const context: any = {
+      document: {
+        getElementById: (id: string) => id === 'priceChartContainer' ? container : { addEventListener() {}, innerHTML: '' },
+      },
+      LightweightCharts: {
+        LineSeries: {}, createChart(_container: unknown, options: unknown) {
+          context.options = options;
+          return {
+            addSeries: () => ({ setData() {} }),
+            applyOptions(options: unknown) { context.refreshed = options; },
+            timeScale: () => ({ subscribeVisibleLogicalRangeChange() {}, fitContent() {} }),
+          };
+        },
+      },
+      ResizeObserver: class { observe() {} }, requestAnimationFrame(fn: () => void) { fn(); },
+      hideNewsDotTooltip() {}, currentChartRange: '7d', symbolNewsFilter: 'all', symbolNewsSearch: '',
+    };
+    runInNewContext(source + `renderPriceChart({candles: [{timestamp: 1791207000000, close: 125}], news: []});`, context);
+    assert.equal(context.options.timeScale.timeVisible, true);
+    assert.equal(context.options.timeScale.secondsVisible, false);
+    assert.equal(context.refreshed.timeScale.timeVisible, true);
+    assert.match(context.options.localization.timeFormatter(1791207000), /13:30 UTC$/);
+    assert.equal(context.options.timeScale.time, undefined);
+  });
+
   it('rejects catalyst audio even when previously cached, but plays cached breaking audio', async () => {
     await storage.saveAudio(7002, Buffer.from('old-catalyst-audio'));
     assert.equal((await get('/api/audio/7002')).status, 403);
@@ -348,6 +418,9 @@ describe('Web Server & API Endpoints', () => {
   });
 
   it('rejects unsupported chart ranges and invalid symbols', async () => {
+    for (const range of ['30d', '90d', '1y']) {
+      assert.equal((await get('/api/chart/NVDA?range=' + range)).status, 400);
+    }
     assert.equal((await get('/api/chart/NVDA?range=max')).status, 400);
     assert.equal((await get('/api/chart/NVDA?range=invalid')).status, 400);
     assert.equal((await get('/api/chart/NVDA%2Fbad')).status, 400);
@@ -360,6 +433,12 @@ describe('Web Server & API Endpoints', () => {
     assert.ok(res.raw.includes('symbolNewsList'));
     assert.ok(res.raw.includes('"NVDA"'));
     assert.ok(res.raw.includes('Back to Radar Dashboard'));
+    assert.ok(!res.raw.includes('data-range="30d"'));
+    assert.ok(!res.raw.includes('data-range="90d"'));
+    assert.ok(!res.raw.includes('data-range="1y"'));
+    assert.ok(res.raw.includes('Time: UTC'));
+    assert.ok(res.raw.includes('timeVisible: true'));
+    assert.ok(!res.raw.includes("time: { format:"));
   });
 
   it('keeps saved interests and presets within the configured watchlist', async () => {

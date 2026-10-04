@@ -44,13 +44,13 @@ Breaking News Article ──► Jev System 1 Decision ──► Typed Binary Sig
 ```mermaid
 flowchart TD
     subgraph Scheduler ["Deterministic Scheduler & Rate Limiter"]
-        A["Circular Watchlist Queue<br/>16 Tickers: US + HK ADRs"] -->|Paced 2.0s Tick| B["Finnhub News Client"]
+        A["Circular Watchlist Queue<br/>27 Tickers: US + HK ADRs"] -->|Paced 2.0s Tick| B["Finnhub News Client"]
     end
 
     subgraph External ["Finnhub & Yahoo Finance"]
-        B -->|Dynamic Window: 1-Year Sync| C{"Finnhub API"}
+        B -->|News Lookback: Max 7 Days| C{"Finnhub API"}
         C -->|Articles Array| D["Dual-Eviction LRU Cache<br/>TTL: 48h • Max: 10,000"]
-        B -->|Price History| YF["Yahoo Finance Chart API<br/>24H / 7D / 30D / 90D / 1Y"]
+        B -->|Price History| YF["Yahoo Finance Chart API<br/>24H / 7D chart + full daily archive"]
     end
 
     subgraph Storage ["Centralized Prediction Cache (MongoDB Atlas)"]
@@ -92,7 +92,7 @@ flowchart TD
 The service embeds a dark-mode web application and REST API:
 
 * **Dedicated Symbol Pages (`/symbol/:symbol`):**
-  - **TradingView Lightweight Charts Price Chart:** High-performance interactive chart with `24H`, `7D`, `30D`, `90D`, `1Y` range selector powered by [`lightweight-charts`](https://github.com/tradingview/lightweight-charts).
+    - **TradingView Lightweight Charts Price Chart:** High-performance interactive chart with `24H` and `7D` range selectors, intraday time-axis labels and UTC date/time crosshair labels, powered by [`lightweight-charts`](https://github.com/tradingview/lightweight-charts).
     - **Published News Dots on Chart:** Breaking and notable catalyst events are plotted on the price line, interpolated between bars: 🟢 **Emerald Green** for Bullish signals, 🔴 **Rose Red** for Bearish signals, and a glowing outer halo for 🔥 **Breaking Critical** news. News outside available price history (such as weekend news after Friday's close) anchors to the nearest price bar; tooltips retain the true publication time and identify the price anchor. Routine news remains in the list without chart dots.
   - **Rich Hover Tooltips:** Hovering over any dot opens a frosted-glass tooltip card showing headline, priority badge, sentiment signal, confidence %, impact %, bull/bear probability split, and a click-to-jump CTA. Smart edge-detection flips the tooltip below the dot when near the top of the chart.
   - **Click-to-Jump Navigation:** Clicking a dot automatically navigates to the correct pagination page and smooth-scrolls to the article with an animated neon highlight flash.
@@ -102,7 +102,7 @@ The service embeds a dark-mode web application and REST API:
 * **Interactive Interest Symbols Filtering:** Multi-select ticker selector with quick presets (Mega Tech, Semis, China/HK ADRs) and instant search, persisted in `localStorage`.
 * **Top Impact News Spotlight:** Dedicated hero spotlight section (`/api/top-news`) highlighting high-urgency catalysts and breaking announcements across your selected interest symbols.
 * **Order by Impact / Urgency:** Sort breaking news by TypeSafe Jev `urgencyScore` (Impact), chronological date, or model confidence.
-* **Dynamic Date Range Filtering:** Quick date range selectors (`3D` default, `24H`, `7D`, `30D`, `1Y`) and custom date range pickers.
+* **Recent News Date Filtering:** News presets are `24H`, `3D` (default), and `7D`; `Custom` date ranges are restricted to the most recent seven days. Public price charts are also capped at seven days; the full price archive remains stored for future backtests.
 * **ElevenLabs Audio Playback:** Click "🎙 Listen with ElevenLabs" on breaking news cards (`BREAKING_CRITICAL` only) to stream voice synthesis directly in the browser with live animated audio waves. Catalyst alerts are text-only.
 * **Render Telemetry:** Live health status (`/health`), rate-limit consumption (~27 req/min), and cache hit metrics.
 
@@ -116,7 +116,7 @@ The service embeds a dark-mode web application and REST API:
     - A `429` pauses the shared queue for at least 60 seconds, or longer when required by `Retry-After`. The scheduler waits `POLL_INTERVAL_MS` after each completed poll rather than bursting through overdue ticks.
     - Run one service replica per Finnhub API key. Local runs or overlapping Render deployments sharing that key can still exhaust the upstream quota; multiple replicas require a distributed limiter or separate keys.
 2. **Centralized MongoDB Shared Cache & Startup Warm-Up:**
-   - On boot, loads recent article IDs directly into the in-memory LRU cache, guaranteeing zero duplicate alerts across container restarts or Render redeployments.
+    - On boot, loads recent Jev-evaluated article IDs into the in-memory LRU cache for restart deduplication. Unmarked legacy predictions are not treated as verified cache hits and are re-evaluated during silent historical sync.
    - Predictions and synthesized ElevenLabs MP3 binaries are persisted in MongoDB Atlas, sharing model decisions and audio buffers across instances.
    - Falls back gracefully to an in-memory store if `MONGODB_URI` is omitted.
 3. **ElevenLabs Voice Alerts via Telegram `sendVoice`:**
@@ -124,10 +124,11 @@ The service embeds a dark-mode web application and REST API:
 4. **Sentry Agent Tracing:**
    - Instruments OpenTelemetry trace spans across Jev decisions, Finnhub polling, and ElevenLabs audio generation to monitor decision latency and token efficiency.
 5. **Dynamic Incremental Sync & Historical Backfill (`HISTORY_SYNC_DAYS`):**
-   - **First Run:** Queries Finnhub for the past 7 days (configurable via `HISTORY_SYNC_DAYS`, default 7) of news across each ticker, seeds Jev predictions, and populates the dashboard silently.
-    - **Subsequent Runs:** Tracks inclusive UTC dates `syncedFrom` and `syncedTo` per symbol in MongoDB's `sync_metadata`. Downtime gaps are fetched from `syncedTo` (with a one-day overlap) through today.
-    - **Expanded History:** Changing `HISTORY_SYNC_DAYS` from 3 to 365 backfills from one year ago through the existing `syncedFrom` (three days ago), silently reusing cached predictions. Live polling resumes on the next tick. Reducing the setting never shrinks recorded coverage.
-    - **Legacy Metadata:** Timestamp-only records are re-seeded once for the configured window because `lastSyncedAt` alone cannot prove historical coverage. Coverage advances only after successful fetches and processing, including valid empty news ranges.
+    - **Bounded News Window:** `HISTORY_SYNC_DAYS` accepts integers from 1 to 7, default 7. Initial sync fetches the configured recent window per ticker. The scheduler caps news lookback at seven days even after longer downtime; it does not backfill older downtime gaps.
+    - **Shared Jev Evaluation:** Every fetched uncached article is genuinely evaluated by Jev through the same live/historical processing path. No fake baseline prediction or fake error fallback is stored. Stored predictions carry `evaluatedBy: 'jev'`.
+    - **Silent Sync & Retries:** Historical sync populates the dashboard without Telegram alerts or automatic voice dispatches. MongoDB `sync_metadata` tracks inclusive UTC dates `syncedFrom` and `syncedTo`, with `evaluatedAll: true` marking fully evaluated coverage. Fetch or evaluation failures are retried, and the sync checkpoint is not advanced on failure.
+    - **First Rollout / Legacy Records:** The first rollout silently re-fetches the configured recent window and re-evaluates unmarked legacy predictions, including previously genuine Jev results whose provenance was not recorded. This one-time re-evaluation makes real Jev API calls and may incur paid usage beyond the free allowance.
+    - **Retention:** Older MongoDB news and prices remain stored. The seven-day limit applies to news fetching, UI date controls, and public chart windows, not archive retention; no MongoDB TTL or deletion is added. Full daily price archiving for future backtests is unchanged.
    - **Continuous Live Polling:** Rolls continuously over the active window, alerting breaking news in sub-second latency.
 6. **Unified News Priority & Urgency Scoring:**
    - TypeSafe Jev evaluates a unified multi-choice `news_priority` decision alongside directional sentiment in a single sub-second evaluation:
@@ -139,7 +140,7 @@ The service embeds a dark-mode web application and REST API:
    - Strict HTML escaping for `&`, `<`, and `>` ensures messages never fail on ticker symbols or financial punctuation (e.g. `AT&T`, `S&P 500`, `P/E > 25`).
 8. **Durable Price History for Future Backtests:**
     - The poller archives **all daily history available from Yahoo** for each watched symbol, independent of dashboard traffic and `HISTORY_SYNC_DAYS`. It reconciles the full daily series once every 24 hours to catch downtime and provider corrections; this is not a guarantee of complete exchange history.
-    - Dashboard requests also retain provider-supplied **15-minute** (`24H`) and **hourly** (`7D`) candles, plus daily bars for longer ranges. Intraday retention starts with fetched data; unavailable older intraday history cannot be reconstructed from daily bars.
+    - Dashboard requests also retain provider-supplied **15-minute** (`24H`) and **hourly** (`7D`) candles. Intraday retention starts with fetched data; unavailable older intraday history cannot be reconstructed from daily bars.
     - MongoDB `price_candles` holds one OHLCV document per `symbol + interval + timestamp`, with a unique compound index, `provider`, `fetchedAt`, and `adjustedClose` when supplied. Upserts correct overlapping bars without deleting older history. Prices retain provider precision. There is no Mongo expiry/TTL on archived candles.
     - `price_history_metadata` records the last successful fetch and its returned bounds. Shared in-memory caching holds at most 100 windows, expires chart windows after five minutes, and coalesces concurrent requests. Refresh failures retry after one minute and serve labeled stale candles when available; synthetic quote-based history is never generated or stored.
     - With MongoDB unavailable/unconfigured, fallback memory retains at most 100 series with 20,000 bars each and is **not durable**. Configure `MONGODB_URI` to build the archive across restarts.
@@ -156,6 +157,8 @@ Deploy your own instance directly to Render with one click:
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy)
 
 Render reads [`render.yaml`](render.yaml) automatically to configure the web service with automated health checks on `/health`.
+
+Set or override `HISTORY_SYNC_DAYS=7` in the Render service's environment settings. Existing environment values above 7 must be changed to an integer from 1 to 7 before deploying; the default does not replace an existing override. Allow for possible paid one-time Jev re-evaluation of unmarked recent predictions on the first rollout; this sync is silent and retains older MongoDB news and prices.
 
 ---
 
@@ -174,10 +177,10 @@ Render reads [`render.yaml`](render.yaml) automatically to configure the web ser
 | `ELEVENLABS_VOICE_ID` | No | `pNInz6obpgDQGcFmaJgB` | ElevenLabs Voice ID (Adam - financial broadcast) |
 | `ENABLE_VOICE_ALERTS`| No | `true` | Enables ElevenLabs voice note alerts in Telegram |
 | `SENTRY_DSN` | No | — | Sentry DSN for Agent Tracing & performance monitoring |
-| `WATCHLIST` | No | AAPL,MSFT,NVDA,GOOGL,AMZN,META,TSLA,AMD,TSM,PLTR,NFLX,BABA,TCEHY,BYDDY,PDD,XIACY | Comma-separated list of ticker symbols |
+| `WATCHLIST` | No | AAPL,MSFT,NVDA,GOOGL,AMZN,META,TSLA,AMD,AVGO,QCOM,TSM,ARM,PLTR,NFLX,CRM,ORCL,COIN,UBER,BABA,TCEHY,BYDDY,BIDU,JD,PDD,NIO,LI,XIACY | Comma-separated list of ticker symbols |
 | `POLL_INTERVAL_MS` | No | `2000` | Paced interval between ticker polls (30 req/min) |
 | `MIN_CONFIDENCE` | No | `0.50` | Minimum confidence cutoff (0.0 to 1.0) |
-| `HISTORY_SYNC_DAYS` | No | `7` | Historical lookback window in days for initial sync (1 to 1825) |
+| `HISTORY_SYNC_DAYS` | No | `7` | Recent news sync lookback in days (integer 1–7); scheduler never fetches beyond seven days, even after downtime. Does not limit price history or archive retention. |
 | `PORT` | No | `3000` | HTTP port for web dashboard & health check |
 
 ---
@@ -192,7 +195,7 @@ Unit tests verify:
 - Bounded LRU Cache capacity and TTL expiration
 - Telegram HTML entity escaping (`&`, `<`, `>`) and priority banner rendering
 - Centralized MongoDB prediction caching and top stocks ranking
-- Confirmed sync range tracking (`getSyncMetadata` / `setSyncRange`), expanded lookbacks, and failed-sync retries
+- Confirmed sync range tracking (`getSyncMetadata` / `setSyncRange`), seven-day lookback caps, Jev provenance migration, and failed-sync retries without advancing checkpoints
 - ElevenLabs synthesized audio buffer caching and retrieval
 - Environment validation, optional Telegram fallback, and `HISTORY_SYNC_DAYS` boundary constraints
 - Multi-symbol interest filtering, date range lookbacks, and impact-based ordering

@@ -55,6 +55,21 @@ export function createWebServer(options: WebServerOptions): http.Server {
     }
 
     try {
+      // News controls and both feed endpoints are restricted to the latest seven UTC days.
+      const today = new Date().toISOString().split('T')[0]!;
+      const earliest = new Date(Date.now() - 7 * 86400000).toISOString().split('T')[0]!;
+      const fromDate = url.searchParams.get('fromDate') ?? earliest;
+      const toDate = url.searchParams.get('toDate') ?? today;
+      if (url.pathname === '/api/news' || url.pathname === '/api/top-news') {
+        const validDate = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value)
+          && Number.isFinite(Date.parse(value)) && new Date(value).toISOString().slice(0, 10) === value;
+        if (!validDate(fromDate) || !validDate(toDate)
+          || fromDate < earliest || toDate > today || fromDate > toDate) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'News dates must be valid YYYY-MM-DD dates within the last 7 days, with fromDate <= toDate.' }));
+          return;
+        }
+      }
       // 0. Vendored TradingView Lightweight Charts browser build (served from node_modules)
       if (url.pathname === '/vendor/lightweight-charts.js') {
         const script = loadLightweightChartsScript();
@@ -125,8 +140,6 @@ export function createWebServer(options: WebServerOptions): http.Server {
         const symbols = symbolsParam
           ? symbolsParam.split(',').map((s) => s.trim().toUpperCase()).filter((s) => s.length > 0)
           : watchlist;
-        const fromDate = url.searchParams.get('fromDate') || undefined;
-        const toDate = url.searchParams.get('toDate') || undefined;
         const limit = Number.parseInt(url.searchParams.get('limit') || '4', 10);
 
         const topNews = await storage.getRecentNews({
@@ -153,8 +166,6 @@ export function createWebServer(options: WebServerOptions): http.Server {
         const priorityParam = url.searchParams.get('priority') as 'BREAKING_CRITICAL' | 'NOTABLE_CATALYST' | 'ROUTINE_NOISE' | null;
         const priority = priorityParam || undefined;
         const breakingOnly = url.searchParams.get('breaking') === 'true';
-        const fromDate = url.searchParams.get('fromDate') || undefined;
-        const toDate = url.searchParams.get('toDate') || undefined;
         const sortBy = (url.searchParams.get('sortBy') as 'date' | 'impact' | 'confidence') || 'date';
         const limit = Number(url.searchParams.get('limit') ?? '50');
         const offset = Number(url.searchParams.get('offset') ?? '0');
@@ -268,7 +279,7 @@ export function createWebServer(options: WebServerOptions): http.Server {
       if (url.pathname.startsWith('/api/chart/')) {
         const symbol = url.pathname.replace('/api/chart/', '').trim().toUpperCase();
         const range = url.searchParams.get('range') || '7d';
-        if (!/^[A-Z0-9.^=-]{1,20}$/.test(symbol) || !['24h', '1d', '7d', '30d', '90d', '1y'].includes(range)) {
+        if (!/^[A-Z0-9.^=-]{1,20}$/.test(symbol) || !['24h', '1d', '7d'].includes(range)) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'Invalid chart symbol or range' }));
           return;
@@ -287,18 +298,12 @@ export function createWebServer(options: WebServerOptions): http.Server {
           : { candles: [], stale: true, fetchedAt: null };
         const candles = history.candles;
 
-        // Determine lookback for news articles based on range
+        // Public price and news windows are capped at seven days; archives remain intact.
         const now = Date.now();
         const rangeMs =
           range === '24h' || range === '1d'
             ? 24 * 3600 * 1000
-            : range === '30d'
-              ? 30 * 24 * 3600 * 1000
-              : range === '90d'
-                ? 90 * 24 * 3600 * 1000
-                : range === '1y'
-                  ? 365 * 24 * 3600 * 1000
-                  : 7 * 24 * 3600 * 1000;
+            : 7 * 24 * 3600 * 1000;
         const fromDate = new Date(now - rangeMs).toISOString().split('T')[0];
 
         const news = await storage.getRecentNews({
@@ -1748,8 +1753,6 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
               <button class="control-btn active" data-days="3" onclick="setDateRangePreset(3, this)">3D (Default)</button>
               <button class="control-btn" data-days="1" onclick="setDateRangePreset(1, this)">24H</button>
               <button class="control-btn" data-days="7" onclick="setDateRangePreset(7, this)">7D</button>
-              <button class="control-btn" data-days="30" onclick="setDateRangePreset(30, this)">30D</button>
-              <button class="control-btn" data-days="365" onclick="setDateRangePreset(365, this)">1Y (All)</button>
               <button class="control-btn" onclick="toggleCustomDatePicker(this)">Custom</button>
             </div>
             <div class="custom-date-inputs" id="customDateInputs">
@@ -1875,14 +1878,12 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
               <span class="legend-item"> 🟢 Bullish News</span>
               <span class="legend-item"> 🔴 Bearish News</span>
               <span class="legend-item"> 🔥 Breaking Halo</span>
+              <span class="legend-item">Time: UTC</span>
             </div>
           </div>
           <div class="range-buttons" id="chartRangeButtons">
             <button class="range-btn" data-range="24h" onclick="setChartRange('24h', this)">24H</button>
             <button class="range-btn active" data-range="7d" onclick="setChartRange('7d', this)">7D</button>
-            <button class="range-btn" data-range="30d" onclick="setChartRange('30d', this)">30D</button>
-            <button class="range-btn" data-range="90d" onclick="setChartRange('90d', this)">90D</button>
-            <button class="range-btn" data-range="1y" onclick="setChartRange('1y', this)">1Y</button>
           </div>
         </div>
 
@@ -2058,6 +2059,7 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
     }
 
     function setDateRangePreset(days, btn) {
+      if (!Number.isInteger(days) || days < 1 || days > 7) return;
       dateRangeDays = days;
       customFromDate = '';
       customToDate = '';
@@ -2076,8 +2078,14 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
         btn.classList.add('active');
         const now = new Date();
         const threeDaysAgo = new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000);
+        const earliest = new Date(now.getTime() - 7 * 86400000).toISOString().split('T')[0];
+        const today = now.toISOString().split('T')[0];
+        for (const id of ['fromDateInput', 'toDateInput']) {
+          document.getElementById(id).min = earliest;
+          document.getElementById(id).max = today;
+        }
         document.getElementById('fromDateInput').value = threeDaysAgo.toISOString().split('T')[0];
-        document.getElementById('toDateInput').value = now.toISOString().split('T')[0];
+        document.getElementById('toDateInput').value = today;
       }
     }
 
@@ -2086,6 +2094,14 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
       const to = document.getElementById('toDateInput').value;
       if (!from || !to) {
         alert('Please choose both start and end dates.');
+        return;
+      }
+      const today = new Date().toISOString().split('T')[0];
+      const earliest = new Date(Date.now() - 7 * 86400000).toISOString().split('T')[0];
+      if (!document.getElementById('fromDateInput').checkValidity()
+        || !document.getElementById('toDateInput').checkValidity()
+        || from < earliest || to > today || from > to) {
+        alert('Choose dates within the last 7 days, with the start date before or equal to the end date.');
         return;
       }
       customFromDate = from;
@@ -2455,6 +2471,7 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
     }
 
     function setChartRange(range, btn) {
+      if (!['24h', '1d', '7d'].includes(range)) return;
       currentChartRange = range;
       document.querySelectorAll('#chartRangeButtons .range-btn').forEach(b => b.classList.remove('active'));
       if (btn) btn.classList.add('active');
@@ -2531,7 +2548,14 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
         rightPriceScale: { borderColor: 'rgba(255, 255, 255, 0.08)' },
         timeScale: {
           borderColor: 'rgba(255, 255, 255, 0.08)',
-          time: { format: 'yyyy-MM-dd HH:mm' },
+          timeVisible: true,
+          secondsVisible: false,
+        },
+        localization: {
+          timeFormatter: time => new Date(Number(time) * 1000).toLocaleString(undefined, {
+            timeZone: 'UTC', month: 'short', day: 'numeric',
+            hour: '2-digit', minute: '2-digit', hour12: false,
+          }) + ' UTC',
         },
         crosshair: {
           vertLine: { color: 'rgba(99, 102, 241, 0.5)', labelBackgroundColor: '#6366F1' },
@@ -2594,11 +2618,8 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
         width: container.clientWidth,
         height: container.clientHeight,
         timeScale: {
-          time: {
-            format: currentChartRange === '24h' || currentChartRange === '1d'
-              ? 'HH:mm'
-              : 'yyyy-MM-dd',
-          },
+          timeVisible: true,
+          secondsVisible: false,
         },
       });
 

@@ -58,7 +58,7 @@ export class NewsAlertPoller {
   private timer: NodeJS.Timeout | null = null;
   private symbolIndex = 0;
 
-  // Track symbols that have completed cold-start baseline seeding
+  // Track symbols that have completed cold-start historical evaluation.
   private readonly seededSymbols = new Set<string>();
 
   // Operational metrics
@@ -81,7 +81,7 @@ export class NewsAlertPoller {
     this.storage = options.storage;
     this.elevenlabsService = options.elevenlabsService;
     this.deduplicator = options.deduplicator;
-    this.historySyncDays = options.historySyncDays ?? 365;
+    this.historySyncDays = Math.min(7, Math.max(1, options.historySyncDays ?? 7));
     this.priceHistoryService = options.priceHistoryService;
 
     if (options.initialSeededSymbols) {
@@ -161,17 +161,18 @@ export class NewsAlertPoller {
         // Legacy metadata cannot prove historical coverage: re-seed once using cached predictions.
         const syncedFrom = metadata?.syncedFrom;
         const syncedTo = metadata?.syncedTo;
-        const isHistoricalSync = !syncedFrom || !syncedTo || historyFrom < syncedFrom;
+        const isHistoricalSync = !syncedFrom || !syncedTo || historyFrom < syncedFrom || !metadata?.evaluatedAll;
 
         if (isHistoricalSync) {
           fromDate = historyFrom;
           // Finnhub dates are inclusive; overlap the boundary to avoid losing that day's news.
-          if (syncedFrom && syncedTo) toDate = syncedFrom;
+          if (syncedFrom && syncedTo && metadata?.evaluatedAll && historyFrom < syncedFrom) toDate = syncedFrom;
           console.log(`📅 [Poller] Historical sync for ${symbol}: querying ${fromDate} to ${toDate}...`);
         } else {
           // Catch up through today with a one-day reporting overlap. Do not skip downtime gaps.
           fromDate = new Date(new Date(syncedTo!).getTime() - oneDay)
             .toISOString().split('T')[0]!;
+          if (fromDate < historyFrom) fromDate = historyFrom;
         }
 
         // 1. Fetch real-time market quote
@@ -189,7 +190,7 @@ export class NewsAlertPoller {
         await this.processArticlesForSymbol(symbol, articles, isHistoricalSync);
 
         // Only successful fetches and storage writes extend confirmed coverage.
-        await this.storage.setSyncRange(symbol, fromDate, toDate, articles.length, now);
+        await this.storage.setSyncRange(symbol, fromDate, toDate, articles.length, now, true);
         this.seededSymbols.add(symbol);
       } catch (error) {
         console.error(`❌ [Poller] Error polling news for ${symbol}:`, error instanceof Error ? error.message : error);
@@ -209,75 +210,12 @@ export class NewsAlertPoller {
     articles: FinnhubNewsArticle[],
     isHistoricalSync: boolean
   ): Promise<void> {
-    if (isHistoricalSync) {
-      // Sort articles newest first
-      const sorted = [...articles].sort((a, b) => b.datetime - a.datetime);
-
-      // 1. Populate deduplication cache with all historical articles so we never alert on them
-      for (const article of sorted) {
-        this.deduplicator.add(article.id);
-      }
-
-      // 2. Classify top 3 newest articles with real Jev System 1 inference for the dashboard,
-      // and pre-seed the rest with baseline routine representation
-      const topArticles = sorted.slice(0, 3);
-      const remainingArticles = sorted.slice(3);
-
-      for (const article of topArticles) {
-        const existing = await this.storage.getCachedPrediction(article.id);
-        if (!existing) {
-          try {
-            const classification = await this.jevService.classifyArticleSentiment(article);
-            await this.storage.savePrediction(article, classification);
-            console.log(`🧠 [Jev Seed] Evaluated recent headline for ${symbol} (#${article.id}): ${classification.label} (${classification.priority})`);
-          } catch (jevErr) {
-            console.warn(`⚠️ [Jev Seed] Jev seed classification failed for #${article.id}:`, jevErr instanceof Error ? jevErr.message : jevErr);
-            await this.storage.savePrediction(article, {
-              sentiment: 1,
-              label: 'BULLISH',
-              confidence: 0.8,
-              probabilities: { bullish: 0.8, bearish: 0.2 },
-              rawChoice: 'bullish',
-              priority: 'ROUTINE_NOISE',
-              priorityConfidence: 0.8,
-              priorityProbabilities: { breaking_critical: 0.05, notable_catalyst: 0.15, routine_noise: 0.8 },
-              isBreaking: false,
-              urgencyScore: 0.125,
-            });
-          }
-        }
-      }
-
-      for (const article of remainingArticles) {
-        const existing = await this.storage.getCachedPrediction(article.id);
-        if (!existing) {
-          await this.storage.savePrediction(article, {
-            sentiment: 1,
-            label: 'BULLISH',
-            confidence: 0.8,
-            probabilities: { bullish: 0.8, bearish: 0.2 },
-            rawChoice: 'bullish',
-            priority: 'ROUTINE_NOISE',
-            priorityConfidence: 0.8,
-            priorityProbabilities: { breaking_critical: 0.05, notable_catalyst: 0.15, routine_noise: 0.8 },
-            isBreaking: false,
-            urgencyScore: 0.125,
-          });
-        }
-      }
-
-      console.log(
-        `🌱 [Poller] Seeded ${this.historySyncDays}-day baseline for ${symbol}: ${articles.length} historical articles loaded into storage & cache.`
-      );
-      return;
-    }
-
-    // Subsequent runs (including gap catch-up): process from oldest to newest
+    // Historical sync and live polling share inference and retry behavior.
     const sortedArticles = [...articles].sort((a, b) => a.datetime - b.datetime);
     let processingFailed = false;
 
     for (const article of sortedArticles) {
-      if (this.deduplicator.has(article.id)) {
+      if (!isHistoricalSync && this.deduplicator.has(article.id)) {
         continue;
       }
 
@@ -297,7 +235,7 @@ export class NewsAlertPoller {
         let classification: JevSentimentResult;
 
         const cached = await this.storage.getCachedPrediction(article.id);
-        if (cached) {
+        if (cached?.evaluatedBy === 'jev') {
           this.cacheHits++;
           classification = {
             sentiment: cached.sentiment,
@@ -326,7 +264,7 @@ export class NewsAlertPoller {
         this.deduplicator.add(article.id);
 
         // If the article occurred during a previous downtime gap (> 24h ago), backfill quietly into DB
-        if (!isFresh) {
+        if (isHistoricalSync || !isFresh) {
           console.log(`ℹ️ [Poller] Backfilled gap article #${article.id} for ${symbol} into MongoDB (age: ${Math.round(articleAgeHours)}h, skipping Telegram push).`);
           continue;
         }
