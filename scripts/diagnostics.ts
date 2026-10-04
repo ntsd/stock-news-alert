@@ -48,10 +48,10 @@ async function runDiagnostics() {
   try {
     if (audioBuffer) {
       console.log('   Sending voice alert to Telegram...');
-      await telegram.sendVoiceAlert(audioBuffer, '🎙 <b>[TEST]</b> ElevenLabs audio test alert for Stock News Alert!');
+      await telegram.sendVoiceAlert(audioBuffer, '🎙 <b>[TEST]</b> ElevenLabs audio test alert for Zero Market Sentinel!');
       console.log('   ✅ Telegram voice memo delivered successfully!');
     } else {
-      await telegram.sendAlert('🔔 <b>[TEST]</b> Text test alert for Stock News Alert!');
+      await telegram.sendAlert('🔔 <b>[TEST]</b> Text test alert for Zero Market Sentinel!');
       console.log('   ✅ Telegram text message delivered successfully!');
     }
   } catch (err: any) {

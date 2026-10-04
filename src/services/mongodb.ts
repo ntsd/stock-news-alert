@@ -70,7 +70,7 @@ export class PredictionStorageService {
 
   constructor(
     private readonly uri?: string,
-    private readonly dbName = 'stock_news_alert'
+    private readonly dbName = 'zero_market_sentinel'
   ) {}
 
   public async init(): Promise<void> {

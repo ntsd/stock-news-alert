@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: stock-news-alert
+    name: zero-market-sentinel
     runtime: node
     plan: free
     buildCommand: npm install && npm run build

@@ -1,7 +1,7 @@
 {
-  "name": "stock-news-alert",
+  "name": "zero-market-sentinel",
   "version": "1.0.0",
-  "description": "Production-ready Node.js stock news alerting service using Finnhub, TypeSafe AI Jev decision models, and Telegram bot alerts.",
+  "description": "Zero Market Sentinel: Sub-second System 1 AI financial market sentinel, live dashboard, and voice dispatch engine powered by TypeSafe AI Jev, ElevenLabs, MongoDB Atlas, and Render.",
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
@@ -14,7 +14,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ntsd/stock-news-alert.git"
+    "url": "git+https://github.com/ntsd/zero-market-sentinel.git"
   },
   "keywords": [
     "finnhub",

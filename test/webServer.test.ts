@@ -125,7 +125,7 @@ describe('Web Server & API Endpoints', () => {
     const res = await get('/health');
     assert.equal(res.status, 200);
     assert.equal(res.data.status, 'healthy');
-    assert.equal(res.data.service, 'stock-news-alert');
+    assert.equal(res.data.service, 'zero-market-sentinel');
   });
 
   it('should filter top stocks by interest symbols query parameter', async () => {
@@ -171,7 +171,7 @@ describe('Web Server & API Endpoints', () => {
   it('should render the dashboard HTML with interest symbol filters and impact controls', async () => {
     const res = await get('/');
     assert.equal(res.status, 200);
-    assert.ok(res.raw.includes('Stock News Alert'));
+    assert.ok(res.raw.includes('Zero Market Sentinel'));
     assert.ok(res.raw.includes('Watched Interest Symbols'));
     assert.ok(res.raw.includes('Top Impact News on Watched Symbols'));
     assert.ok(res.raw.includes('Highest Impact (Urgency Score)'));

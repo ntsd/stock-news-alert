@@ -1,4 +1,4 @@
-# 📈 Stock News Alert (`stock-news-alert`)
+# 📈 Zero Market Sentinel (`zero-market-sentinel`)
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -19,7 +19,7 @@ He asked for three things:
 2. *"When I'm commuting or driving, send me a 5-second audio voice dispatch so I don't have to look at my phone."*
 3. *"Give me a live web dashboard where I can see top ranked stocks by bullish sentiment and listen to the news on demand."*
 
-`stock-news-alert` is built to solve exactly that. It runs on **Render**, evaluates news through **TypeSafe AI's Jev** (System 1 non-autoregressive decision model), persists predictions to a centralized **MongoDB Atlas** shared cache, generates audio dispatches via **ElevenLabs**, monitors latency with **Sentry Agent Tracing**, and delivers alerts straight to Alex's Telegram while serving a live Web Dashboard.
+**Zero Market Sentinel** (`zero-market-sentinel`) is built to solve exactly that. It runs on **Render**, evaluates news through **TypeSafe AI's Jev** (System 1 non-autoregressive decision model), persists predictions to a centralized **MongoDB Atlas** shared cache, generates audio dispatches via **ElevenLabs**, monitors latency with **Sentry Agent Tracing**, and delivers alerts straight to Alex's Telegram while serving a live Web Dashboard.
 
 ---
 

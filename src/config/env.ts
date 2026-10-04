@@ -117,7 +117,7 @@ export const envSchema = z.object({
   MONGODB_DATABASE: z
     .string()
     .optional()
-    .default('stock_news_alert'),
+    .default('zero_market_sentinel'),
 });
 
 export function loadAndValidateConfig(): AppConfig {
