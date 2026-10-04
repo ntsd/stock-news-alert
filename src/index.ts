@@ -14,6 +14,7 @@ console.log('📈 Starting stock-news-alert Production Service');
 console.log(`🌍 Environment: ${config.nodeEnv}`);
 console.log(`📋 Watchlist: [${config.watchlist.join(', ')}]`);
 console.log(`🎯 Min Confidence Filter: ${config.minConfidence * 100}%`);
+console.log(`📱 Telegram Alerts: ${config.enableTelegramAlerts ? 'ENABLED' : 'DISABLED (Dashboard-only mode)'}`);
 console.log(`🎙 ElevenLabs Voice Alerts: ${config.enableVoiceAlerts ? 'ENABLED' : 'DISABLED'}`);
 console.log(`🛡 Sentry Agent Tracing: ${config.sentryDsn ? 'ENABLED' : 'LOCAL'}`);
 console.log(`🗄 MongoDB Central Cache: ${config.mongodbUri ? 'CLUSTER' : 'MEMORY_STORE'}`);

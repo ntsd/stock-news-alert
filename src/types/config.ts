@@ -1,8 +1,9 @@
 export interface AppConfig {
   finnhubApiKey: string;
   typesafeApiKey: string;
-  telegramBotToken: string;
-  telegramChatId: string;
+  telegramBotToken?: string;
+  telegramChatId?: string;
+  enableTelegramAlerts: boolean;
   watchlist: string[];
   pollIntervalMs: number;
   minConfidence: number;

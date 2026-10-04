@@ -135,8 +135,8 @@ Render reads [`render.yaml`](render.yaml) automatically to configure the web ser
 | :--- | :---: | :---: | :--- |
 | `FINNHUB_API_KEY` | **Yes** | — | Finnhub API Key for financial news |
 | `TYPESAFE_API_KEY` | **Yes** | — | TypeSafe AI API Key for Jev decision model |
-| `TELEGRAM_BOT_TOKEN` | **Yes** | — | Telegram Bot token (`<bot_id>:<token>`) |
-| `TELEGRAM_CHAT_ID` | **Yes** | — | Target Telegram Chat or User ID |
+| `TELEGRAM_BOT_TOKEN` | No | — | Optional Telegram Bot token (`<bot_id>:<token>`) for push alerts |
+| `TELEGRAM_CHAT_ID` | No | — | Optional target Telegram Chat ID (omitted = dashboard-only mode) |
 | `MONGODB_URI` | No | — | MongoDB Atlas connection string for centralized cache |
 | `ELEVENLABS_API_KEY` | No | — | ElevenLabs API Key for voice note alerts |
 | `ELEVENLABS_VOICE_ID` | No | `pNInz6obpgDQGcFmaJgB` | ElevenLabs Voice ID (Adam - financial broadcast) |
@@ -156,15 +156,16 @@ Render reads [`render.yaml`](render.yaml) automatically to configure the web ser
 npm test
 ```
 
-20 unit tests across 5 test suites verify:
+24 unit tests across 6 test suites verify:
 - Bounded LRU Cache capacity and TTL expiration
 - Telegram HTML entity escaping (`&`, `<`, `>`) and priority banner rendering
 - Centralized MongoDB prediction caching and top stocks ranking
 - Incremental sync timestamp tracking (`getLastSyncDate` / `setLastSyncDate`)
 - ElevenLabs synthesized audio buffer caching and retrieval
-- Environment validation and `HISTORY_SYNC_DAYS` boundary constraints
+- Environment validation, optional Telegram fallback, and `HISTORY_SYNC_DAYS` boundary constraints
 - Multi-symbol interest filtering, date range lookbacks, and impact-based ordering
 - Web server endpoints (`/health`, `/api/stocks`, `/api/top-news`, `/api/news`) and HTML rendering
+- Telegram alert graceful degradation when credentials are omitted
 
 ---
 

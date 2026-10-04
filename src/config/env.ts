@@ -16,12 +16,16 @@ export const envSchema = z.object({
 
   TELEGRAM_BOT_TOKEN: z
     .string()
-    .min(1, 'TELEGRAM_BOT_TOKEN cannot be empty')
-    .regex(/^\d+:[A-Za-z0-9_-]+$/, 'TELEGRAM_BOT_TOKEN must match format <bot_id>:<token>'),
+    .optional()
+    .transform((val) => (val && val.trim().length > 0 ? val.trim() : undefined))
+    .refine((val) => !val || /^\d+:[A-Za-z0-9_-]+$/.test(val), {
+      message: 'TELEGRAM_BOT_TOKEN must match format <bot_id>:<token>',
+    }),
 
   TELEGRAM_CHAT_ID: z
     .string()
-    .min(1, 'TELEGRAM_CHAT_ID cannot be empty'),
+    .optional()
+    .transform((val) => (val && val.trim().length > 0 ? val.trim() : undefined)),
 
   WATCHLIST: z
     .string()
@@ -141,6 +145,7 @@ export function loadAndValidateConfig(): AppConfig {
     typesafeApiKey: data.TYPESAFE_API_KEY,
     telegramBotToken: data.TELEGRAM_BOT_TOKEN,
     telegramChatId: data.TELEGRAM_CHAT_ID,
+    enableTelegramAlerts: !!(data.TELEGRAM_BOT_TOKEN && data.TELEGRAM_CHAT_ID),
     watchlist: data.WATCHLIST,
     pollIntervalMs: data.POLL_INTERVAL_MS,
     minConfidence: data.MIN_CONFIDENCE,

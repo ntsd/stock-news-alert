@@ -61,4 +61,28 @@ describe('Environment Configuration & Validation', () => {
     });
     assert.equal(strResult.success, false);
   });
+
+  it('should successfully validate environment when Telegram credentials are omitted', () => {
+    const withoutTelegram = {
+      FINNHUB_API_KEY: 'test_finnhub_key',
+      TYPESAFE_API_KEY: 'test_typesafe_key',
+    };
+
+    const result = envSchema.safeParse(withoutTelegram);
+    assert.ok(result.success);
+    assert.equal(result.data.TELEGRAM_BOT_TOKEN, undefined);
+    assert.equal(result.data.TELEGRAM_CHAT_ID, undefined);
+  });
+
+  it('should reject malformed TELEGRAM_BOT_TOKEN when provided', () => {
+    const invalidToken = {
+      FINNHUB_API_KEY: 'test_finnhub_key',
+      TYPESAFE_API_KEY: 'test_typesafe_key',
+      TELEGRAM_BOT_TOKEN: 'not_a_valid_bot_token_format',
+      TELEGRAM_CHAT_ID: '123456789',
+    };
+
+    const result = envSchema.safeParse(invalidToken);
+    assert.equal(result.success, false);
+  });
 });

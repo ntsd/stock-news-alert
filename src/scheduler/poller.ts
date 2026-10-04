@@ -333,44 +333,48 @@ export class NewsAlertPoller {
         // 4. Format Telegram alert HTML
         const alertHtml = formatNewsAlertHtml(article, classification);
 
-        // 5. ElevenLabs Voice Note generation (with Mongo audio caching)
-        let voiceSent = false;
-        if (this.enableVoiceAlerts && this.elevenlabsService.isEnabled) {
-          try {
-            // Check if audio was already synthesized and cached in Mongo
-            let audioBuffer = await this.storage.getAudio(article.id);
-            if (!audioBuffer) {
-              audioBuffer = await this.elevenlabsService.generateAlertVoice(
-                article.related,
-                classification.label,
-                article.headline,
-                Math.round(classification.confidence * 100)
-              );
-              if (audioBuffer) {
-                await this.storage.saveAudio(article.id, audioBuffer);
+        if (this.telegramService.isEnabled) {
+          // 5. ElevenLabs Voice Note generation (with Mongo audio caching)
+          let voiceSent = false;
+          if (this.enableVoiceAlerts && this.elevenlabsService.isEnabled) {
+            try {
+              // Check if audio was already synthesized and cached in Mongo
+              let audioBuffer = await this.storage.getAudio(article.id);
+              if (!audioBuffer) {
+                audioBuffer = await this.elevenlabsService.generateAlertVoice(
+                  article.related,
+                  classification.label,
+                  article.headline,
+                  Math.round(classification.confidence * 100)
+                );
+                if (audioBuffer) {
+                  await this.storage.saveAudio(article.id, audioBuffer);
+                }
+              } else {
+                console.log(`♻️ [Mongo Audio] Reusing cached ElevenLabs audio for #${article.id}`);
               }
-            } else {
-              console.log(`♻️ [Mongo Audio] Reusing cached ElevenLabs audio for #${article.id}`);
-            }
 
-            if (audioBuffer) {
-              await this.telegramService.sendVoiceAlert(audioBuffer, alertHtml);
-              this.voiceAlertsSent++;
-              voiceSent = true;
-              console.log(`🎙 [ElevenLabs] Voice alert delivered for ${symbol} (#${article.id})`);
+              if (audioBuffer) {
+                await this.telegramService.sendVoiceAlert(audioBuffer, alertHtml);
+                this.voiceAlertsSent++;
+                voiceSent = true;
+                console.log(`🎙 [ElevenLabs] Voice alert delivered for ${symbol} (#${article.id})`);
+              }
+            } catch (voiceErr) {
+              console.warn(`⚠️ [ElevenLabs] Voice dispatch failed, falling back to text:`, voiceErr instanceof Error ? voiceErr.message : voiceErr);
             }
-          } catch (voiceErr) {
-            console.warn(`⚠️ [ElevenLabs] Voice dispatch failed, falling back to text:`, voiceErr instanceof Error ? voiceErr.message : voiceErr);
           }
-        }
 
-        // If voice wasn't dispatched, dispatch standard HTML text alert
-        if (!voiceSent) {
-          await this.telegramService.sendAlert(alertHtml);
-          console.log(`📨 [Telegram] Alert delivered for ${symbol} (#${article.id})`);
-        }
+          // If voice wasn't dispatched, dispatch standard HTML text alert
+          if (!voiceSent) {
+            await this.telegramService.sendAlert(alertHtml);
+            console.log(`📨 [Telegram] Alert delivered for ${symbol} (#${article.id})`);
+          }
 
-        this.alertsSent++;
+          this.alertsSent++;
+        } else {
+          console.log(`📱 [Poller] Signal recorded for ${symbol} (#${article.id}) (Telegram push notifications disabled).`);
+        }
       } catch (err) {
         console.error(
           `❌ [Poller] Error evaluating/alerting article #${article.id} for ${symbol}:`,

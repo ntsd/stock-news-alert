@@ -17,16 +17,16 @@ services:
         value: "0.50"
       - key: ENABLE_HEALTH_SERVER
         value: "true"
-      # Required Secrets
+      # Required Secrets (Only 2 keys needed for instant 1-click launch!)
       - key: FINNHUB_API_KEY
         sync: false
       - key: TYPESAFE_API_KEY
         sync: false
+      # Optional Notification Channels & Partner Integrations
       - key: TELEGRAM_BOT_TOKEN
         sync: false
       - key: TELEGRAM_CHAT_ID
         sync: false
-      # Partner Integrations (Optional)
       - key: MONGODB_URI
         sync: false
       - key: ELEVENLABS_API_KEY

@@ -3,9 +3,10 @@ import { withExponentialBackoff } from '../utils/retry.js';
 import { traceSpan } from '../instrumentation/sentry.js';
 
 export class TelegramAlertService {
-  private readonly botToken: string;
-  private readonly defaultChatId: string;
-  private readonly baseUrl: string;
+  private readonly botToken?: string;
+  private readonly defaultChatId?: string;
+  private readonly baseUrl?: string;
+  public readonly isEnabled: boolean;
 
   // Queue to ensure strict compliance with Telegram's 1 message/sec per chat limit
   private readonly sendQueue: Array<() => Promise<void>> = [];
@@ -13,17 +14,19 @@ export class TelegramAlertService {
   private lastSendTime = 0;
   private readonly minIntervalMs = 1000;
 
-  constructor(botToken: string, defaultChatId: string) {
+  constructor(botToken?: string, defaultChatId?: string) {
     this.botToken = botToken;
     this.defaultChatId = defaultChatId;
-    this.baseUrl = `https://api.telegram.org/bot${this.botToken}`;
+    this.isEnabled = !!(botToken && defaultChatId);
+    this.baseUrl = this.isEnabled ? `https://api.telegram.org/bot${this.botToken}` : undefined;
   }
 
   /**
    * Enqueues an HTML formatted message to be dispatched to Telegram.
    */
   public async sendAlert(htmlText: string, chatId?: string): Promise<void> {
-    const targetChatId = chatId || this.defaultChatId;
+    if (!this.isEnabled) return;
+    const targetChatId = chatId || this.defaultChatId!;
 
     return new Promise<void>((resolve, reject) => {
       this.sendQueue.push(async () => {
@@ -47,7 +50,8 @@ export class TelegramAlertService {
     captionHtml: string,
     chatId?: string
   ): Promise<void> {
-    const targetChatId = chatId || this.defaultChatId;
+    if (!this.isEnabled) return;
+    const targetChatId = chatId || this.defaultChatId!;
 
     return new Promise<void>((resolve, reject) => {
       this.sendQueue.push(async () => {
