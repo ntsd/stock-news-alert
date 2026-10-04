@@ -41,38 +41,41 @@ Breaking News Article ──► Jev System 1 Decision ──► Typed Binary Sig
 ```mermaid
 flowchart TD
     subgraph Scheduler ["Deterministic Scheduler & Rate Limiter"]
-        A[Circular Watchlist Queue\nAAPL, TSLA, NVDA...] -->|Paced 1.2s Tick| B(Finnhub News Client)
+        A["Circular Watchlist Queue<br/>27 Tickers: US + HK ADRs"] -->|Paced 2.0s Tick| B["Finnhub News Client"]
     end
 
     subgraph External ["Finnhub API (60 req/min Free Cap)"]
-        B -->|company-news| C{Finnhub API}
-        C -->|Articles Array| D[Dual-Eviction LRU Cache\nTTL: 48h | Max: 10,000]
+        B -->|Dynamic Window: 1-Year Sync| C{"Finnhub API"}
+        C -->|Articles Array| D["Dual-Eviction LRU Cache<br/>TTL: 48h • Max: 10,000"]
     end
 
     subgraph Storage ["Centralized Prediction Cache (MongoDB Atlas)"]
-        D -->|Unseen Articles| M{Shared Mongo Cache}
-        M -->|Cache Hit| G[Alert Formatter]
-        M -->|Cache Miss| E[TypeSafe AI Jev\nSystem 1 Decision Engine]
+        D -->|Unseen Articles| M{"Shared Mongo Cache"}
+        M -->|Cache Hit| G["Alert Formatter"]
+        M -->|Cache Miss| E["TypeSafe AI Jev<br/>System 1 Decision Engine"]
         E -->|Store Result| M
-        E -->|Choice: Bullish/Bearish + Conf| F{Confidence Filter}
-        F -->|Pass| G
+        E -->|Choice: Bullish/Bearish + Priority| F{"Urgency Filter"}
+        F -->|Noise: Saved to DB| K
+        F -->|Breaking or Notable| G
     end
 
     subgraph Observability ["Sentry Agent Tracing"]
-        E -.->|Latency & Token Spans| S[Sentry Performance Monitor]
+        E -.->|Decision Spans| S["Sentry Performance Monitor"]
         B -.->|Network Spans| S
+        EL -.->|Audio Spans| S
     end
 
-    subgraph Audio ["ElevenLabs Voice Engine"]
-        G -->|Audio Synthesis| EL[ElevenLabs Turbo v2.5]
+    subgraph Audio ["ElevenLabs Voice Engine & Mongo MP3 Cache"]
+        G -->|Audio Synthesis| EL["ElevenLabs Turbo v2.5"]
+        EL -->|Save Audio Buffer| M
     end
 
     subgraph Delivery ["Telegram Delivery & Web Dashboard"]
-        EL -->|MP3 Buffer| H[Telegram Outbound 1 msg/s Queue]
+        EL -->|MP3 Buffer| H["Telegram Outbound Queue (Optional)"]
         G -->|HTML Payload| H
-        H --> I[(Telegram Bot API: Text + sendVoice)]
-        I --> J[Instant Alert to Alex]
-        K[Web Dashboard & REST API :3000\n/api/stocks, /api/news, /health] -.->|Keepalive & Telemetry| L[Render Cloud]
+        H -.->|If Configured| I["Telegram Bot API: Text + sendVoice"]
+        I -.-> J["Instant Alert to User"]
+        K["Web Dashboard & REST API :3000<br/>/api/stocks, /api/top-news, /api/news, /health"] -.->|Keepalive & Telemetry| L["Render Cloud"]
     end
 ```
 
@@ -130,6 +133,8 @@ Render reads [`render.yaml`](render.yaml) automatically to configure the web ser
 ---
 
 ## ⚙️ Configuration & Environment Variables
+
+> 💡 **Need help getting API keys?** See our step-by-step [API Keys & Environment Setup Guide](API_KEYS.md) for direct links and walkthroughs to obtain free keys for Finnhub, TypeSafe AI, Telegram, ElevenLabs, MongoDB Atlas, and Sentry.
 
 | Variable | Required | Default | Description |
 | :--- | :---: | :---: | :--- |
