@@ -88,4 +88,20 @@ describe('PredictionStorageService (Centralized Prediction Cache)', () => {
     assert.equal(top[1]?.symbol, 'AAPL');
     assert.equal(top[1]?.bullishRatio, 0.5);
   });
+
+  it('should cache and retrieve synthesized ElevenLabs audio buffer', async () => {
+    const storage = new PredictionStorageService();
+    await storage.init();
+
+    const sampleAudio = Buffer.from('mock-mp3-audio-data-elevenlabs');
+    const articleId = 889900;
+
+    // Cache audio
+    await storage.saveAudio(articleId, sampleAudio);
+
+    // Retrieve audio
+    const retrieved = await storage.getAudio(articleId);
+    assert.ok(retrieved);
+    assert.equal(retrieved.toString(), 'mock-mp3-audio-data-elevenlabs');
+  });
 });

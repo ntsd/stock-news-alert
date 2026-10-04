@@ -86,7 +86,7 @@ export function createWebServer(options: WebServerOptions): http.Server {
         return;
       }
 
-      // 5. ElevenLabs Audio Stream endpoint on-demand
+      // 5. ElevenLabs Audio Stream endpoint on-demand (with MongoDB audio cache)
       if (url.pathname.startsWith('/api/audio/')) {
         const articleId = Number.parseInt(url.pathname.replace('/api/audio/', ''), 10);
         const article = await storage.getCachedPrediction(articleId);
@@ -97,6 +97,19 @@ export function createWebServer(options: WebServerOptions): http.Server {
           return;
         }
 
+        // 1. Check if audio is already cached in MongoDB
+        const cachedAudio = await storage.getAudio(articleId);
+        if (cachedAudio) {
+          res.writeHead(200, {
+            'Content-Type': 'audio/mpeg',
+            'Content-Length': cachedAudio.length,
+            'Cache-Control': 'public, max-age=86400',
+          });
+          res.end(cachedAudio);
+          return;
+        }
+
+        // 2. Otherwise generate via ElevenLabs if key configured
         if (!elevenlabsService.isEnabled) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'ElevenLabs API key not configured' }));
@@ -115,6 +128,9 @@ export function createWebServer(options: WebServerOptions): http.Server {
           res.end(JSON.stringify({ error: 'Failed to generate audio' }));
           return;
         }
+
+        // 3. Cache generated audio in MongoDB for future instant plays
+        await storage.saveAudio(articleId, audio);
 
         res.writeHead(200, {
           'Content-Type': 'audio/mpeg',

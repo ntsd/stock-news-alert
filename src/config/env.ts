@@ -26,7 +26,7 @@ const envSchema = z.object({
   WATCHLIST: z
     .string()
     .optional()
-    .default('AAPL,TSLA,NVDA,MSFT,AMZN,GOOGL')
+    .default('AAPL,MSFT,NVDA,GOOGL,AMZN,META,TSLA,AMD,AVGO,QCOM,TSM,ARM,PLTR,NFLX,CRM,ORCL,COIN,UBER,BABA,TCEHY,BYDDY,BIDU,JD,PDD,NIO,LI')
     .transform((val) =>
       val
         .split(',')
@@ -37,7 +37,7 @@ const envSchema = z.object({
   POLL_INTERVAL_MS: z
     .string()
     .optional()
-    .default('1200')
+    .default('2000')
     .transform((val) => Number.parseInt(val, 10))
     .refine((val) => !Number.isNaN(val) && val >= 1000, {
       message: 'POLL_INTERVAL_MS must be an integer >= 1000ms (to honor 60 req/min limit)',

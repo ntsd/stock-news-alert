@@ -20,6 +20,7 @@ export interface StoredArticle {
   };
   rawChoice: 'bullish' | 'bearish';
   createdAt: string;
+  audioBase64?: string; // Cached ElevenLabs MP3
 }
 
 export interface StockAggregate {
@@ -247,6 +248,55 @@ export class PredictionStorageService {
       }
       return b.totalArticles - a.totalArticles;
     });
+  }
+
+  /**
+   * Caches an ElevenLabs synthesized MP3 audio buffer in MongoDB to eliminate redundant TTS API costs.
+   */
+  public async saveAudio(id: number, audioBuffer: Buffer): Promise<void> {
+    const base64 = audioBuffer.toString('base64');
+    const existing = this.memoryStore.get(id);
+    if (existing) {
+      existing.audioBase64 = base64;
+    } else {
+      this.memoryStore.set(id, {
+        _id: id,
+        symbol: 'UNKNOWN',
+        headline: '',
+        summary: '',
+        source: '',
+        url: '',
+        publishedAt: new Date().toISOString(),
+        sentiment: 1,
+        label: 'BULLISH',
+        confidence: 1,
+        probabilities: { bullish: 1, bearish: 0 },
+        rawChoice: 'bullish',
+        createdAt: new Date().toISOString(),
+        audioBase64: base64,
+      });
+    }
+
+    if (this.collection) {
+      await traceSpan('mongo.save_audio', 'db.write', { id, bytes: audioBuffer.length }, async () => {
+        await this.collection!.updateOne(
+          { _id: id },
+          { $set: { audioBase64: base64 } },
+          { upsert: true }
+        );
+      });
+    }
+  }
+
+  /**
+   * Retrieves a cached ElevenLabs MP3 audio buffer from MongoDB.
+   */
+  public async getAudio(id: number): Promise<Buffer | null> {
+    const doc = await this.getCachedPrediction(id);
+    if (doc?.audioBase64) {
+      return Buffer.from(doc.audioBase64, 'base64');
+    }
+    return null;
   }
 
   public async close(): Promise<void> {

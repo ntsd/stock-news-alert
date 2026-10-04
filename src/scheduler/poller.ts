@@ -232,16 +232,25 @@ export class NewsAlertPoller {
         // 4. Format Telegram alert HTML
         const alertHtml = formatNewsAlertHtml(article, classification);
 
-        // 5. ElevenLabs Voice Note generation (if enabled)
+        // 5. ElevenLabs Voice Note generation (with Mongo audio caching)
         let voiceSent = false;
         if (this.enableVoiceAlerts && this.elevenlabsService.isEnabled) {
           try {
-            const audioBuffer = await this.elevenlabsService.generateAlertVoice(
-              article.related,
-              classification.label,
-              article.headline,
-              Math.round(classification.confidence * 100)
-            );
+            // Check if audio was already synthesized and cached in Mongo
+            let audioBuffer = await this.storage.getAudio(article.id);
+            if (!audioBuffer) {
+              audioBuffer = await this.elevenlabsService.generateAlertVoice(
+                article.related,
+                classification.label,
+                article.headline,
+                Math.round(classification.confidence * 100)
+              );
+              if (audioBuffer) {
+                await this.storage.saveAudio(article.id, audioBuffer);
+              }
+            } else {
+              console.log(`♻️ [Mongo Audio] Reusing cached ElevenLabs audio for #${article.id}`);
+            }
 
             if (audioBuffer) {
               await this.telegramService.sendVoiceAlert(audioBuffer, alertHtml);

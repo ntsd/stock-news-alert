@@ -56,6 +56,12 @@ export class FinnhubClient {
           if (response.status === 401) {
             throw new Error(`Finnhub 401 Unauthorized: Invalid API key. ${errorBody}`);
           }
+          if (response.status === 403) {
+            console.warn(
+              `⚠️ [Finnhub] "${symbol}" returned 403 Forbidden. Finnhub Free Tier does not include native international exchanges (like .HK). For Hong Kong equities, use the corresponding US ADR ticker (e.g., BABA for 9988.HK, TCEHY for 0700.HK, BYDDY for 1211.HK, BIDU for 9888.HK).`
+            );
+            return [];
+          }
           throw new Error(`Finnhub API error (${response.status}): ${errorBody}`);
         }
 

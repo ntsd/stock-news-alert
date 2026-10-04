@@ -10,9 +10,9 @@ services:
       - key: NODE_ENV
         value: production
       - key: WATCHLIST
-        value: AAPL,TSLA,NVDA,MSFT,AMZN,GOOGL
+        value: AAPL,MSFT,NVDA,GOOGL,AMZN,META,TSLA,AMD,AVGO,QCOM,TSM,ARM,PLTR,NFLX,CRM,ORCL,COIN,UBER,BABA,TCEHY,BYDDY,BIDU,JD,PDD,NIO,LI
       - key: POLL_INTERVAL_MS
-        value: "1200"
+        value: "2000"
       - key: MIN_CONFIDENCE
         value: "0.50"
       - key: ENABLE_HEALTH_SERVER
