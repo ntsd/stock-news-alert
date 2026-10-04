@@ -157,4 +157,25 @@ describe('PredictionStorageService (Centralized Prediction Cache)', () => {
     assert.ok(ids.includes(101));
     assert.ok(ids.includes(102));
   });
+
+  it('should track and retrieve last sync date for incremental fetching', async () => {
+    const storage = new PredictionStorageService();
+    await storage.init();
+
+    // Initially null for unseeded symbol
+    const initial = await storage.getLastSyncDate('GOOGL');
+    assert.equal(initial, null);
+
+    // Set sync timestamp (e.g. 10 days ago)
+    const tenDaysAgo = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000);
+    await storage.setLastSyncDate('GOOGL', tenDaysAgo, 42);
+
+    const retrieved = await storage.getLastSyncDate('GOOGL');
+    assert.ok(retrieved);
+    assert.equal(retrieved.toISOString(), tenDaysAgo.toISOString());
+
+    // Verify seeded symbols list includes GOOGL
+    const seeded = await storage.getSeededSymbols();
+    assert.ok(seeded.includes('GOOGL'));
+  });
 });

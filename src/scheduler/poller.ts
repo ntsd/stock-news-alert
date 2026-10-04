@@ -20,6 +20,8 @@ export interface PollerOptions {
   storage: PredictionStorageService;
   elevenlabsService: ElevenLabsService;
   deduplicator: BoundedTtlLruCache;
+  initialSeededSymbols?: string[];
+  historySyncDays?: number;
 }
 
 export interface PollerStats {
@@ -47,6 +49,7 @@ export class NewsAlertPoller {
   private readonly storage: PredictionStorageService;
   private readonly elevenlabsService: ElevenLabsService;
   private readonly deduplicator: BoundedTtlLruCache;
+  private readonly historySyncDays: number;
 
   private isRunning = false;
   private timer: NodeJS.Timeout | null = null;
@@ -76,6 +79,13 @@ export class NewsAlertPoller {
     this.storage = options.storage;
     this.elevenlabsService = options.elevenlabsService;
     this.deduplicator = options.deduplicator;
+    this.historySyncDays = options.historySyncDays ?? 365;
+
+    if (options.initialSeededSymbols) {
+      for (const s of options.initialSeededSymbols) {
+        this.seededSymbols.add(s.toUpperCase());
+      }
+    }
   }
 
   public start(): void {
@@ -142,19 +152,37 @@ export class NewsAlertPoller {
 
     await traceSpan('poller.tick', 'scheduler.poll', { symbol }, async () => {
       try {
-        const isFirstRun = !this.seededSymbols.has(symbol);
-        let articles: FinnhubNewsArticle[];
+        const lastSyncDate = await this.storage.getLastSyncDate(symbol);
+        const isFirstRun = lastSyncDate === null && !this.seededSymbols.has(symbol);
+
+        const now = new Date();
+        const toDate = now.toISOString().split('T')[0]!;
+        let fromDate: string;
+
         if (isFirstRun) {
-          // On cold-start for this symbol, fetch past 3 months (90 days)
-          const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
-          const fromDate = ninetyDaysAgo.toISOString().split('T')[0]!;
-          console.log(`📅 [Poller] Cold-start fetch for ${symbol}: querying 3-month history (from ${fromDate})...`);
-          articles = await this.finnhubClient.fetchCompanyNews(symbol, fromDate);
+          // 1st run: fetch historySyncDays ago (default 365 days / 1 year) to today
+          const historyDaysAgo = new Date(now.getTime() - this.historySyncDays * 24 * 60 * 60 * 1000);
+          fromDate = historyDaysAgo.toISOString().split('T')[0]!;
+          console.log(`📅 [Poller] First sync for ${symbol}: querying ${this.historySyncDays}-day history (${fromDate} to ${toDate})...`);
         } else {
-          // Regular continuous tick: rolling 24-48 hours
-          articles = await this.finnhubClient.fetchCompanyNews(symbol);
+          // Subsequent run: fetch after the last sync date (with 24h buffer for timezone/reporting overlap) to today
+          // e.g. If last sync was 10 days ago, fetches from 11 days ago to today.
+          // e.g. If last sync was 1 minute ago, fetches from yesterday to today.
+          const oneDayBuffer = 24 * 60 * 60 * 1000;
+          const syncBaseDate = lastSyncDate ?? new Date(now.getTime() - oneDayBuffer);
+          const syncFrom = new Date(Math.max(
+            now.getTime() - this.historySyncDays * 24 * 60 * 60 * 1000, // safety cap at historySyncDays max
+            syncBaseDate.getTime() - oneDayBuffer
+          ));
+          fromDate = syncFrom.toISOString().split('T')[0]!;
         }
-        await this.processArticlesForSymbol(symbol, articles);
+
+        const articles = await this.finnhubClient.fetchCompanyNews(symbol, fromDate, toDate);
+        await this.processArticlesForSymbol(symbol, articles, isFirstRun);
+
+        // Persist successful sync timestamp in MongoDB Atlas
+        await this.storage.setLastSyncDate(symbol, now, articles.length);
+        this.seededSymbols.add(symbol);
       } catch (error) {
         console.error(`❌ [Poller] Error polling news for ${symbol}:`, error instanceof Error ? error.message : error);
       }
@@ -163,10 +191,9 @@ export class NewsAlertPoller {
 
   private async processArticlesForSymbol(
     symbol: string,
-    articles: FinnhubNewsArticle[]
+    articles: FinnhubNewsArticle[],
+    isFirstRun: boolean
   ): Promise<void> {
-    const isFirstRun = !this.seededSymbols.has(symbol);
-
     if (isFirstRun) {
       // Sort articles newest first
       const sorted = [...articles].sort((a, b) => b.datetime - a.datetime);
@@ -224,14 +251,13 @@ export class NewsAlertPoller {
         }
       }
 
-      this.seededSymbols.add(symbol);
       console.log(
-        `🌱 [Poller] Seeded 3-month baseline for ${symbol}: ${articles.length} historical articles loaded into storage & cache.`
+        `🌱 [Poller] Seeded ${this.historySyncDays}-day baseline for ${symbol}: ${articles.length} historical articles loaded into storage & cache.`
       );
       return;
     }
 
-    // Process new articles in chronological order (oldest to newest)
+    // Subsequent runs (including gap catch-up): process from oldest to newest
     const sortedArticles = [...articles].sort((a, b) => a.datetime - b.datetime);
 
     for (const article of sortedArticles) {
@@ -241,6 +267,11 @@ export class NewsAlertPoller {
 
       this.deduplicator.add(article.id);
       this.articlesSeen++;
+
+      // Check article age: if it occurred during a long server downtime (> 24 hours ago),
+      // we backfill it into MongoDB for the dashboard without blasting Telegram notifications
+      const articleAgeHours = (Date.now() - article.datetime * 1000) / (60 * 60 * 1000);
+      const isFresh = articleAgeHours <= 24;
 
       console.log(
         `✨ [Poller] New article detected for ${symbol} (#${article.id}): "${article.headline.substring(0, 60)}..."`
@@ -275,6 +306,12 @@ export class NewsAlertPoller {
           classification = await this.jevService.classifyArticleSentiment(article);
           await this.storage.savePrediction(article, classification);
           console.log(`🧠 [Jev] Decision for #${article.id}: ${classification.label} (${classification.sentiment}) | Priority: ${classification.priority} (${(classification.urgencyScore * 100).toFixed(0)}% urgency) | Conf: ${(classification.confidence * 100).toFixed(1)}%`);
+        }
+
+        // If the article occurred during a previous downtime gap (> 24h ago), backfill quietly into DB
+        if (!isFresh) {
+          console.log(`ℹ️ [Poller] Backfilled gap article #${article.id} for ${symbol} into MongoDB (age: ${Math.round(articleAgeHours)}h, skipping Telegram push).`);
+          continue;
         }
 
         // 3. Confidence & Noise Filtering Check

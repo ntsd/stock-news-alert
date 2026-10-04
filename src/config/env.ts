@@ -5,7 +5,7 @@ import type { AppConfig } from '../types/config.js';
 // Load environment variables from .env file
 dotenv.config();
 
-const envSchema = z.object({
+export const envSchema = z.object({
   FINNHUB_API_KEY: z
     .string()
     .min(1, 'FINNHUB_API_KEY cannot be empty'),
@@ -59,6 +59,15 @@ const envSchema = z.object({
     .transform((val) => Number.parseInt(val, 10))
     .refine((val) => !Number.isNaN(val) && val > 0 && val < 65536, {
       message: 'PORT must be a valid port number (1-65535)',
+    }),
+
+  HISTORY_SYNC_DAYS: z
+    .string()
+    .optional()
+    .default('365')
+    .transform((val) => Number.parseInt(val, 10))
+    .refine((val) => !Number.isNaN(val) && val >= 1 && val <= 1825, {
+      message: 'HISTORY_SYNC_DAYS must be an integer between 1 and 1825 days (up to 5 years)',
     }),
 
   ENABLE_HEALTH_SERVER: z
@@ -136,6 +145,7 @@ export function loadAndValidateConfig(): AppConfig {
     pollIntervalMs: data.POLL_INTERVAL_MS,
     minConfidence: data.MIN_CONFIDENCE,
     port: data.PORT,
+    historySyncDays: data.HISTORY_SYNC_DAYS,
     enableHealthServer: data.ENABLE_HEALTH_SERVER,
     nodeEnv: data.NODE_ENV,
     sentryDsn: data.SENTRY_DSN,

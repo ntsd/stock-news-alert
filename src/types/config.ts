@@ -8,6 +8,7 @@ export interface AppConfig {
   minConfidence: number;
   port: number;
   enableHealthServer: boolean;
+  historySyncDays: number;
   nodeEnv: 'development' | 'production' | 'test';
 
   // Sentry Observability

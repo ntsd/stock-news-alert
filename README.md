@@ -101,10 +101,10 @@ The service embeds a dark-mode web application and REST API at `http://localhost
    - High-confidence alerts generate audio broadcasts via ElevenLabs' low-latency `eleven_turbo_v2_5` model, sent as voice memos with HTML captions.
 4. **Sentry Agent Tracing:**
    - Instruments OpenTelemetry trace spans across Jev decisions, Finnhub polling, and ElevenLabs audio generation to monitor decision latency and token efficiency.
-5. **3-Month Historical Cold-Start Seed & Continuous Polling:**
-   - On first run for each symbol, queries Finnhub for the past 3 months (90 days) of news.
-   - Smartly evaluates recent headlines with Jev System 1 model and seeds historical articles silently into MongoDB Atlas to populate the 90-day dashboard overview and sentiment ratios without alert storms.
-   - Subsequent ticks continuously poll the rolling 24-48 hour window for fresh breaking news.
+5. **Dynamic Incremental Sync & 1-Year Historical Backfill (`HISTORY_SYNC_DAYS`):**
+   - **First Run:** Queries Finnhub for the past 1 year (configurable via `HISTORY_SYNC_DAYS`, default 365 days) of news across each ticker, smartly seeds recent catalysts with Jev, and populates the historical dashboard overview silently.
+   - **Subsequent Runs (e.g. After Downtime):** Tracks `lastSyncDate` per symbol in MongoDB Atlas (`sync_metadata` collection). If the bot was offline for 10 days, on startup it automatically queries from 10 days ago to today, healing all data gaps without duplicate alerts.
+   - **Continuous Live Polling:** Rolls continuously over the active window, alerting breaking news in sub-second latency.
 6. **Unified News Priority & Urgency Scoring:**
    - TypeSafe Jev evaluates a unified multi-choice `news_priority` decision alongside directional sentiment in a single sub-second evaluation:
      - `BREAKING_CRITICAL`: Unscheduled, high-volatility events (earnings surprises, CEO resignations, regulatory bans) trigger urgent push alerts and ElevenLabs audio broadcasts.
@@ -139,9 +139,10 @@ Render reads [`render.yaml`](render.yaml) automatically to configure the web ser
 | `ELEVENLABS_VOICE_ID` | No | `pNInz6obpgDQGcFmaJgB` | ElevenLabs Voice ID (Adam - financial broadcast) |
 | `ENABLE_VOICE_ALERTS`| No | `true` | Enables ElevenLabs voice note alerts in Telegram |
 | `SENTRY_DSN` | No | — | Sentry DSN for Agent Tracing & performance monitoring |
-| `WATCHLIST` | No | `AAPL,TSLA,NVDA,MSFT,AMZN,GOOGL` | Comma-separated list of ticker symbols |
-| `POLL_INTERVAL_MS` | No | `1200` | Paced interval between ticker polls (min: `1000`) |
+| `WATCHLIST` | No | 27 tech & US ADR tickers | Comma-separated list of ticker symbols |
+| `POLL_INTERVAL_MS` | No | `2000` | Paced interval between ticker polls (30 req/min) |
 | `MIN_CONFIDENCE` | No | `0.50` | Minimum confidence cutoff (0.0 to 1.0) |
+| `HISTORY_SYNC_DAYS` | No | `365` | Historical lookback window in days for initial sync (1 to 1825) |
 | `PORT` | No | `3000` | HTTP port for web dashboard & health check |
 
 ---
@@ -152,10 +153,11 @@ Render reads [`render.yaml`](render.yaml) automatically to configure the web ser
 npm test
 ```
 
-8 unit tests verify:
+10 unit tests verify:
 - Bounded LRU Cache capacity and TTL expiration
 - Telegram HTML entity escaping (`&`, `<`, `>`) and priority banner rendering
 - Centralized MongoDB prediction caching and top stocks ranking
+- Incremental sync timestamp tracking (`getLastSyncDate` / `setLastSyncDate`)
 - ElevenLabs synthesized audio buffer caching and retrieval
 
 ---

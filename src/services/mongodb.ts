@@ -29,6 +29,12 @@ export interface StoredArticle {
   urgencyScore: number;
 }
 
+export interface SyncMetadata {
+  _id: string; // Ticker symbol, e.g. "AAPL"
+  lastSyncedAt: string;
+  articlesCount: number;
+}
+
 export interface StockAggregate {
   symbol: string;
   totalArticles: number;
@@ -46,7 +52,9 @@ export class PredictionStorageService {
   private client: MongoClient | null = null;
   private db: Db | null = null;
   private collection: Collection<StoredArticle> | null = null;
+  private syncCollection: Collection<SyncMetadata> | null = null;
   private readonly memoryStore = new Map<number, StoredArticle>();
+  private readonly syncMemoryStore = new Map<string, Date>();
 
   constructor(
     private readonly uri?: string,
@@ -68,6 +76,7 @@ export class PredictionStorageService {
       await this.client.connect();
       this.db = this.client.db(this.dbName);
       this.collection = this.db.collection<StoredArticle>('predictions');
+      this.syncCollection = this.db.collection<SyncMetadata>('sync_metadata');
 
       // Create indexes for efficient querying and aggregation
       await this.collection.createIndex({ symbol: 1, publishedAt: -1 });
@@ -81,6 +90,7 @@ export class PredictionStorageService {
       console.warn('⚠️ [MongoDB] Connection failed. Falling back to internal memory prediction store:', err instanceof Error ? err.message : err);
       this.client = null;
       this.collection = null;
+      this.syncCollection = null;
     }
   }
 
@@ -110,6 +120,110 @@ export class PredictionStorageService {
         return docs.map((doc) => doc._id);
       }
       return Array.from(this.memoryStore.keys()).slice(0, limit);
+    });
+  }
+
+  /**
+   * Retrieves the last sync timestamp for a symbol to determine the exact start date for the next fetch.
+   * Checks both sync_metadata collection and recent articles in predictions collection.
+   */
+  public async getLastSyncDate(symbol: string): Promise<Date | null> {
+    const sym = symbol.toUpperCase();
+    return traceSpan('mongo.get_last_sync_date', 'db.read', { symbol: sym }, async () => {
+      // 1. Check sync_metadata collection
+      if (this.syncCollection) {
+        const meta = await this.syncCollection.findOne({ _id: sym });
+        if (meta?.lastSyncedAt) {
+          return new Date(meta.lastSyncedAt);
+        }
+      }
+
+      // 2. Check memory store for sync timestamp
+      if (this.syncMemoryStore.has(sym)) {
+        return this.syncMemoryStore.get(sym)!;
+      }
+
+      // 3. Fallback: check newest article date in collection
+      if (this.collection) {
+        const latestArticle = await this.collection
+          .find({ symbol: sym })
+          .sort({ publishedAt: -1 })
+          .limit(1)
+          .project({ publishedAt: 1 })
+          .next();
+        if (latestArticle?.publishedAt) {
+          return new Date(latestArticle.publishedAt);
+        }
+      }
+
+      for (const art of this.memoryStore.values()) {
+        if (art.symbol.toUpperCase() === sym) {
+          return new Date(art.publishedAt);
+        }
+      }
+
+      return null;
+    });
+  }
+
+  /**
+   * Updates the last sync timestamp for a symbol in MongoDB Atlas.
+   */
+  public async setLastSyncDate(
+    symbol: string,
+    date: Date = new Date(),
+    articlesCount = 0
+  ): Promise<void> {
+    const sym = symbol.toUpperCase();
+    this.syncMemoryStore.set(sym, date);
+
+    if (this.syncCollection) {
+      await traceSpan('mongo.set_last_sync_date', 'db.write', { symbol: sym }, async () => {
+        await this.syncCollection!.updateOne(
+          { _id: sym },
+          {
+            $set: {
+              _id: sym,
+              lastSyncedAt: date.toISOString(),
+              articlesCount,
+            },
+          },
+          { upsert: true }
+        );
+      });
+    }
+  }
+
+  /**
+   * Returns a list of symbols that already have historical articles or sync metadata stored in MongoDB,
+   * preventing redundant 3-month backfill fetches on server restarts.
+   */
+  public async getSeededSymbols(): Promise<string[]> {
+    return traceSpan('mongo.get_seeded_symbols', 'db.read', {}, async () => {
+      const set = new Set<string>();
+
+      if (this.syncCollection) {
+        const allMeta = await this.syncCollection.find({}, { projection: { _id: 1 } }).toArray();
+        for (const m of allMeta) {
+          set.add(String(m._id).toUpperCase());
+        }
+      }
+
+      if (this.collection) {
+        const symbols = await this.collection.distinct('symbol');
+        for (const s of symbols) {
+          set.add(String(s).toUpperCase());
+        }
+      }
+
+      for (const sym of this.syncMemoryStore.keys()) {
+        set.add(sym.toUpperCase());
+      }
+      for (const art of this.memoryStore.values()) {
+        if (art.symbol) set.add(art.symbol.toUpperCase());
+      }
+
+      return Array.from(set);
     });
   }
 

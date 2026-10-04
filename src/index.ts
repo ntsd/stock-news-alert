@@ -17,6 +17,7 @@ console.log(`🎯 Min Confidence Filter: ${config.minConfidence * 100}%`);
 console.log(`🎙 ElevenLabs Voice Alerts: ${config.enableVoiceAlerts ? 'ENABLED' : 'DISABLED'}`);
 console.log(`🛡 Sentry Agent Tracing: ${config.sentryDsn ? 'ENABLED' : 'LOCAL'}`);
 console.log(`🗄 MongoDB Central Cache: ${config.mongodbUri ? 'CLUSTER' : 'MEMORY_STORE'}`);
+console.log(`📜 History Sync Window: ${config.historySyncDays} days`);
 console.log('=====================================================');
 
 // 1. Initialize Sentry Observability
@@ -51,6 +52,11 @@ if (existingIds.length > 0) {
   console.log(`📦 [Cache] Warmed up deduplicator with ${existingIds.length} historical article IDs from storage.`);
 }
 
+const seededSymbols = await storage.getSeededSymbols();
+if (seededSymbols.length > 0) {
+  console.log(`🌱 [Storage] Loaded ${seededSymbols.length} pre-seeded symbols from storage: [${seededSymbols.join(', ')}]`);
+}
+
 // 4. Initialize round-robin scheduler
 const poller = new NewsAlertPoller({
   watchlist: config.watchlist,
@@ -63,6 +69,8 @@ const poller = new NewsAlertPoller({
   storage,
   elevenlabsService,
   deduplicator,
+  initialSeededSymbols: seededSymbols,
+  historySyncDays: config.historySyncDays,
 });
 
 // 5. Start Web Dashboard and API server (for Render web service monitoring & UI)
