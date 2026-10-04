@@ -143,6 +143,19 @@ export function createWebServer(options: WebServerOptions): http.Server {
           return;
         }
 
+        // ElevenLabs is only permitted for notable catalysts and breaking critical events
+        const isVoiceEligible =
+          article.priority === 'BREAKING_CRITICAL' || article.priority === 'NOTABLE_CATALYST';
+        if (!isVoiceEligible) {
+          res.writeHead(403, { 'Content-Type': 'application/json' });
+          res.end(
+            JSON.stringify({
+              error: 'Audio voice synthesis is only available for breaking critical and notable catalyst news.',
+            })
+          );
+          return;
+        }
+
         // 1. Check if audio is already cached in MongoDB
         const cachedAudio = await storage.getAudio(articleId);
         if (cachedAudio) {
@@ -1462,6 +1475,11 @@ function renderDashboardHtml(defaultWatchlist: string[]): string {
           if (n.priority === 'BREAKING_CRITICAL') priorityLabel = '🔥 BREAKING CRITICAL';
           else if (n.priority === 'NOTABLE_CATALYST') priorityLabel = '⚡ NOTABLE CATALYST';
 
+          const isVoiceEligible = n.priority === 'BREAKING_CRITICAL' || n.priority === 'NOTABLE_CATALYST';
+          const audioButtonHtml = isVoiceEligible
+            ? ('<button class="audio-btn" onclick="playVoice(' + n._id + ', this)">🎙 Listen Voice</button>')
+            : '';
+
           return \`
             <div class="spotlight-card \${isBreaking ? 'breaking' : ''}">
               <div>
@@ -1495,9 +1513,7 @@ function renderDashboardHtml(defaultWatchlist: string[]): string {
 
                 <div class="news-footer" style="margin-top:12px;">
                   <span>📡 \${n.source || 'Finnhub'}</span>
-                  <button class="audio-btn" onclick="playVoice(\${n._id}, this)">
-                    🎙 Listen Voice
-                  </button>
+                  \${audioButtonHtml}
                 </div>
               </div>
             </div>
@@ -1564,6 +1580,10 @@ function renderDashboardHtml(defaultWatchlist: string[]): string {
           }
 
           const urgencyPct = Math.round((n.urgencyScore ?? 0) * 100);
+          const isVoiceEligible = n.priority === 'BREAKING_CRITICAL' || n.priority === 'NOTABLE_CATALYST';
+          const audioButtonHtml = isVoiceEligible
+            ? ('<button class="audio-btn" onclick="playVoice(' + n._id + ', this)">🎙 Listen with ElevenLabs</button>')
+            : '';
 
           return \`
             <div class="news-card \${n.priority === 'BREAKING_CRITICAL' ? 'breaking' : ''}">
@@ -1583,9 +1603,7 @@ function renderDashboardHtml(defaultWatchlist: string[]): string {
               <div class="news-summary">\${n.summary}</div>
               <div class="news-footer">
                 <span>📡 Source: <b>\${n.source || 'Finnhub'}</b> • Article ID: #\${n._id}</span>
-                <button class="audio-btn" onclick="playVoice(\${n._id}, this)">
-                  🎙 Listen with ElevenLabs
-                </button>
+                \${audioButtonHtml}
               </div>
             </div>
           \`;

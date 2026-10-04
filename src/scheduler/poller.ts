@@ -334,9 +334,12 @@ export class NewsAlertPoller {
         const alertHtml = formatNewsAlertHtml(article, classification);
 
         if (this.telegramService.isEnabled) {
-          // 5. ElevenLabs Voice Note generation (with Mongo audio caching)
+          // 5. ElevenLabs Voice Note generation (only for BREAKING_CRITICAL and NOTABLE_CATALYST)
           let voiceSent = false;
-          if (this.enableVoiceAlerts && this.elevenlabsService.isEnabled) {
+          const isVoiceEligible =
+            classification.priority === 'BREAKING_CRITICAL' || classification.priority === 'NOTABLE_CATALYST';
+
+          if (this.enableVoiceAlerts && this.elevenlabsService.isEnabled && isVoiceEligible) {
             try {
               // Check if audio was already synthesized and cached in Mongo
               let audioBuffer = await this.storage.getAudio(article.id);

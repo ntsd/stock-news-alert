@@ -418,9 +418,14 @@ export class PredictionStorageService {
       lastUpdated: string;
     }>();
 
+    const hasTargetFilter = Array.isArray(watchlist) && watchlist.length > 0;
+    const allowedSet = hasTargetFilter
+      ? new Set(watchlist.map((s) => s.toUpperCase()))
+      : null;
+
     // Initialize with watchlist tickers
     for (const sym of watchlist) {
-      map.set(sym, {
+      map.set(sym.toUpperCase(), {
         total: 0,
         bullish: 0,
         bearish: 0,
@@ -435,6 +440,9 @@ export class PredictionStorageService {
     // Populate stats
     for (const art of allArticles) {
       const sym = art.symbol.toUpperCase();
+      if (allowedSet && !allowedSet.has(sym)) {
+        continue;
+      }
       if (!map.has(sym)) {
         map.set(sym, {
           total: 0,

@@ -102,6 +102,32 @@ describe('Web Server & API Endpoints', () => {
       }
     );
 
+    await storage.savePrediction(
+      {
+        category: 'company',
+        datetime: Math.floor(Date.now() / 1000) - 10000,
+        headline: 'Routine Technical Commentary on TSLA',
+        id: 7003,
+        image: '',
+        related: 'TSLA',
+        source: 'Motley Fool',
+        summary: 'General educational column on market volatility.',
+        url: 'https://example.com/tsla',
+      },
+      {
+        sentiment: 0,
+        label: 'BEARISH',
+        confidence: 0.7,
+        probabilities: { bullish: 0.3, bearish: 0.7 },
+        rawChoice: 'bearish',
+        priority: 'ROUTINE_NOISE',
+        priorityConfidence: 0.88,
+        priorityProbabilities: { breaking_critical: 0.05, notable_catalyst: 0.1, routine_noise: 0.85 },
+        isBreaking: false,
+        urgencyScore: 0.15,
+      }
+    );
+
     const elevenlabs = new ElevenLabsService();
     server = createWebServer({
       port,
@@ -176,5 +202,20 @@ describe('Web Server & API Endpoints', () => {
     assert.ok(res.raw.includes('Top Impact News on Watched Symbols'));
     assert.ok(res.raw.includes('Highest Impact (Urgency Score)'));
     assert.ok(res.raw.includes('3D (Default)'));
+    // Verify UI contains logic to only show audio button for breaking critical & notable catalyst
+    assert.ok(res.raw.includes("n.priority === 'BREAKING_CRITICAL' || n.priority === 'NOTABLE_CATALYST'"));
+  });
+
+  it('should reject /api/audio/:id with 403 Forbidden for ROUTINE_NOISE articles', async () => {
+    const res = await get('/api/audio/7003');
+    assert.equal(res.status, 403);
+    assert.ok(res.data.error.includes('only available for breaking critical and notable catalyst news'));
+  });
+
+  it('should allow /api/audio/:id for NOTABLE_CATALYST articles (reaches ElevenLabs key validation)', async () => {
+    const res = await get('/api/audio/7002');
+    // Article 7002 is NOTABLE_CATALYST, so it passes priority check and reaches ElevenLabs key check (400)
+    assert.equal(res.status, 400);
+    assert.ok(res.data.error.includes('ElevenLabs API key not configured'));
   });
 });
