@@ -28,8 +28,10 @@
   "author": "ntsd",
   "license": "MIT",
   "dependencies": {
+    "@sentry/node": "^11.4.0",
     "@typesafe-ai/sdk": "^0.6.0",
     "dotenv": "^16.4.7",
+    "mongodb": "^7.7.0",
     "zod": "^3.24.2"
   },
   "devDependencies": {

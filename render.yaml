@@ -17,6 +17,7 @@ services:
         value: "0.50"
       - key: ENABLE_HEALTH_SERVER
         value: "true"
+      # Required Secrets
       - key: FINNHUB_API_KEY
         sync: false
       - key: TYPESAFE_API_KEY
@@ -24,4 +25,15 @@ services:
       - key: TELEGRAM_BOT_TOKEN
         sync: false
       - key: TELEGRAM_CHAT_ID
+        sync: false
+      # Partner Integrations (Optional)
+      - key: MONGODB_URI
+        sync: false
+      - key: ELEVENLABS_API_KEY
+        sync: false
+      - key: ELEVENLABS_VOICE_ID
+        value: "pNInz6obpgDQGcFmaJgB"
+      - key: ENABLE_VOICE_ALERTS
+        value: "true"
+      - key: SENTRY_DSN
         sync: false

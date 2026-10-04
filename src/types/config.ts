@@ -9,4 +9,16 @@ export interface AppConfig {
   port: number;
   enableHealthServer: boolean;
   nodeEnv: 'development' | 'production' | 'test';
+
+  // Sentry Observability
+  sentryDsn?: string;
+
+  // ElevenLabs Voice Alerts
+  elevenlabsApiKey?: string;
+  elevenlabsVoiceId: string;
+  enableVoiceAlerts: boolean;
+
+  // Centralized MongoDB Prediction Storage
+  mongodbUri?: string;
+  mongodbDatabaseName: string;
 }

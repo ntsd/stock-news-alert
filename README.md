@@ -6,7 +6,7 @@
 [![Node.js](https://img.shields.io/badge/Node.js-20%2B-green.svg)](https://nodejs.org/)
 
 > **Hacktoberfest Weekend Challenge: Build for a Friend (`#hf26challenge`)**  
-> *Targeted for the **"Best Use of Render"** Featured Prize Category.*
+> *Targeted for 4 Challenge Categories: **Best Use of Render**, **Best Use of ElevenLabs**, **Best Use of Sentry Agent Tracing**, and **Best Use of MongoDB Atlas**.*
 
 ---
 
@@ -14,10 +14,12 @@
 
 My friend Alex is an active retail investor who follows a concentrated portfolio of tech equities. He was drowning in financial noise: dozens of clickbait articles, press releases, and commentary every hour across Bloomberg, Yahoo Finance, and CNBC.
 
-He asked for one simple thing:
-> *"I don't need another AI writing me 500-word summaries. Just watch my tickers, filter out the noise, and send an instant Telegram alert telling me if breaking news is **Bullish (1)** or **Bearish (0)** with a confidence score, so I know whether to open my brokerage app."*
+He asked for three things:
+1. *"I don't need another generative AI writing me 500-word summaries. Just watch my tickers, filter out the noise, and send an instant Telegram alert telling me if breaking news is **Bullish (1)** or **Bearish (0)** with a confidence score."*
+2. *"When I'm commuting or driving, send me a 5-second audio voice dispatch so I don't have to look at my phone."*
+3. *"Give me a live web dashboard where I can see top ranked stocks by bullish sentiment and listen to the news on demand."*
 
-`stock-news-alert` is built to solve exactly that problem. It runs a strictly paced polling worker on **Render**, evaluates breaking news through **TypeSafe AI's Jev** (a System 1 non-autoregressive decision model), and alerts Alex in sub-second latency with actionable signals and calibrated confidence scores.
+`stock-news-alert` is built to solve exactly that. It runs on **Render**, evaluates news through **TypeSafe AI's Jev** (System 1 non-autoregressive decision model), persists predictions to a centralized **MongoDB Atlas** shared cache, generates audio dispatches via **ElevenLabs**, monitors latency with **Sentry Agent Tracing**, and delivers alerts straight to Alex's Telegram while serving a live Web Dashboard.
 
 ---
 
@@ -47,37 +49,62 @@ flowchart TD
         C -->|Articles Array| D[Dual-Eviction LRU Cache\nTTL: 48h | Max: 10,000]
     end
 
-    subgraph Pipeline ["Processing Pipeline"]
-        D -->|Unseen Articles Only| E[TypeSafe AI Jev\nSystem 1 Decision Engine]
-        E -->|Choice: Bullish/Bearish + Conf| F{Confidence Filter\nconf >= MIN_CONFIDENCE}
-        F -->|Pass| G[HTML Message Formatter\nStrict Entity Escaper]
+    subgraph Storage ["Centralized Prediction Cache (MongoDB Atlas)"]
+        D -->|Unseen Articles| M{Shared Mongo Cache}
+        M -->|Cache Hit| G[Alert Formatter]
+        M -->|Cache Miss| E[TypeSafe AI Jev\nSystem 1 Decision Engine]
+        E -->|Store Result| M
+        E -->|Choice: Bullish/Bearish + Conf| F{Confidence Filter}
+        F -->|Pass| G
     end
 
-    subgraph Delivery ["Telegram Delivery & Monitoring"]
-        G --> H[Outbound 1 msg/s Queue]
-        H --> I[(Telegram Bot API)]
+    subgraph Observability ["Sentry Agent Tracing"]
+        E -.->|Latency & Token Spans| S[Sentry Performance Monitor]
+        B -.->|Network Spans| S
+    end
+
+    subgraph Audio ["ElevenLabs Voice Engine"]
+        G -->|Audio Synthesis| EL[ElevenLabs Turbo v2.5]
+    end
+
+    subgraph Delivery ["Telegram Delivery & Web Dashboard"]
+        EL -->|MP3 Buffer| H[Telegram Outbound 1 msg/s Queue]
+        G -->|HTML Payload| H
+        H --> I[(Telegram Bot API: Text + sendVoice)]
         I --> J[Instant Alert to Alex]
-        K[HTTP Health Server :3000\n/health] -.->|Keepalive & Stats| L[Render Cloud]
+        K[Web Dashboard & REST API :3000\n/api/stocks, /api/news, /health] -.->|Keepalive & Telemetry| L[Render Cloud]
     end
 ```
+
+---
+
+## 🌐 Live Web Dashboard & REST API
+
+The service embeds a dark-mode web application and REST API at `http://localhost:3000`:
+* **Top Watched Equities:** Real-time stock cards ranked by bullish sentiment ratio, confidence meter, and article volume.
+* **Breaking News Feed:** Search and filter by ticker (`NVDA`, `TSLA`, etc.) and sentiment signal (Bullish / Bearish).
+* **ElevenLabs Audio Playback:** Click "🎙 Listen with ElevenLabs" on any card to stream voice synthesis directly in the browser!
+* **Render Telemetry:** Live health status, rate-limit consumption (~50 req/min), and cache hit metrics.
 
 ---
 
 ## 🛡 Production Engineering Features
 
 1. **Guaranteed Finnhub Rate Limit Compliance:**
-   - Finnhub's free tier has a hard ceiling of 60 requests/minute.
-   - The scheduler uses a **drift-compensated self-scheduling tick** set to `1,200ms` (~50 req/min), leaving a 10-call safety buffer for network retries and clock skew.
-2. **Dual-Eviction Deduplication Cache (LRU + TTL):**
-   - Articles are indexed in an in-memory Bounded LRU Cache (capacity 10,000, 48-hour TTL) with $O(1)$ amortized lookup.
-   - Consumes $< 1\text{MB}$ of heap, guaranteeing stable memory over months of execution.
-3. **Cold-Start Storm Protection:**
-   - On initial boot, the first fetch across each symbol seeds the cache with historical articles *without* firing alerts, preventing startup notification floods.
-4. **Outbound Telegram Queue with Entity Escaping:**
-   - Throttled at 1 message/second to respect Telegram's rate limits.
+   - Free tier limit is 60 requests/minute.
+   - Paced scheduler ticks at `1,200ms` (~50 req/min), leaving a 10-call safety buffer for network retries and clock skew.
+2. **Centralized MongoDB Shared Weight Cache:**
+   - Predictions are cached in MongoDB Atlas. If multiple instances or distributed workers poll the same breaking news, Jev inference is reused instantly, saving tokens and sharing model weights.
+   - Falls back gracefully to an in-memory store if `MONGODB_URI` is not set.
+3. **ElevenLabs Voice Alerts via Telegram `sendVoice`:**
+   - High-confidence alerts generate audio broadcasts via ElevenLabs' low-latency `eleven_turbo_v2_5` model, sent as voice memos with HTML captions.
+4. **Sentry Agent Tracing:**
+   - Instruments OpenTelemetry trace spans across Jev decisions, Finnhub polling, and ElevenLabs audio generation to monitor decision latency and token efficiency.
+5. **Cold-Start Storm Protection & Dual-Eviction LRU:**
+   - 10,000 entry LRU cache with 48h TTL keeps memory $< 1\text{MB}$ heap.
+   - Baseline seeding prevents startup alert floods on boot.
+6. **Outbound Telegram Throttling with Strict HTML Escaping:**
    - Strict HTML escaping for `&`, `<`, and `>` ensures messages never fail on ticker symbols or financial punctuation (e.g. `AT&T`, `S&P 500`, `P/E > 25`).
-5. **Render Blueprint Infrastructure-as-Code:**
-   - Native `render.yaml` blueprint with zero-downtime health checking via `/health`.
 
 ---
 
@@ -87,17 +114,7 @@ Deploy this service directly to Render with one click:
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy)
 
-### Manual Blueprint Setup on Render
-
-1. Fork or push this repository to GitHub.
-2. In the [Render Dashboard](https://dashboard.render.com), click **New +** $\to$ **Blueprint**.
-3. Connect your repository. Render automatically reads [`render.yaml`](render.yaml).
-4. Supply your secret environment variables when prompted:
-   - `FINNHUB_API_KEY`
-   - `TYPESAFE_API_KEY`
-   - `TELEGRAM_BOT_TOKEN`
-   - `TELEGRAM_CHAT_ID`
-5. Click **Apply**. Render will build and deploy the web service with automated health checks on `/health`.
+Render reads [`render.yaml`](render.yaml) automatically to configure the web service with automated health checks on `/health`.
 
 ---
 
@@ -109,85 +126,28 @@ Deploy this service directly to Render with one click:
 | `TYPESAFE_API_KEY` | **Yes** | — | TypeSafe AI API Key for Jev decision model |
 | `TELEGRAM_BOT_TOKEN` | **Yes** | — | Telegram Bot token (`<bot_id>:<token>`) |
 | `TELEGRAM_CHAT_ID` | **Yes** | — | Target Telegram Chat or User ID |
+| `MONGODB_URI` | No | — | MongoDB Atlas connection string for centralized cache |
+| `ELEVENLABS_API_KEY` | No | — | ElevenLabs API Key for voice note alerts |
+| `ELEVENLABS_VOICE_ID` | No | `pNInz6obpgDQGcFmaJgB` | ElevenLabs Voice ID (Adam - financial broadcast) |
+| `ENABLE_VOICE_ALERTS`| No | `true` | Enables ElevenLabs voice note alerts in Telegram |
+| `SENTRY_DSN` | No | — | Sentry DSN for Agent Tracing & performance monitoring |
 | `WATCHLIST` | No | `AAPL,TSLA,NVDA,MSFT,AMZN,GOOGL` | Comma-separated list of ticker symbols |
 | `POLL_INTERVAL_MS` | No | `1200` | Paced interval between ticker polls (min: `1000`) |
 | `MIN_CONFIDENCE` | No | `0.50` | Minimum confidence cutoff (0.0 to 1.0) |
-| `PORT` | No | `3000` | HTTP port for Render health checks (Render sets `10000`) |
-| `ENABLE_HEALTH_SERVER`| No | `true` | Enables native HTTP `/health` server |
-| `NODE_ENV` | No | `development` | `development`, `production`, or `test` |
-
----
-
-## 💻 Local Development
-
-### Prerequisites
-- Node.js 20+ (tested on Node 22 & 26)
-- npm 10+
-
-### Setup
-```bash
-# Clone the repository
-git clone https://github.com/ntsd/stock-news-alert.git
-cd stock-news-alert
-
-# Install dependencies
-npm install
-
-# Copy environment template and fill in your keys
-cp .env.example .env
-```
-
-### Running Locally
-```bash
-# Start in development mode with live watch
-npm run dev
-
-# Run unit test suite
-npm test
-
-# Build production bundle
-npm run build
-
-# Start production server
-npm start
-```
-
-### Health Check Endpoint
-When running, inspect service metrics at:
-```bash
-curl http://localhost:3000/health
-```
-```json
-{
-  "status": "healthy",
-  "service": "stock-news-alert",
-  "uptimeSeconds": 42,
-  "timestamp": "2026-10-04T14:48:00.000Z",
-  "stats": {
-    "isRunning": true,
-    "totalPolls": 35,
-    "articlesSeen": 18,
-    "alertsSent": 4,
-    "lastPollTime": "2026-10-04T14:47:59.123Z",
-    "currentSymbol": "NVDA",
-    "watchlistSize": 6,
-    "cacheSize": 18,
-    "seededSymbols": ["AAPL", "TSLA", "NVDA", "MSFT", "AMZN", "GOOGL"]
-  }
-}
-```
+| `PORT` | No | `3000` | HTTP port for web dashboard & health check |
 
 ---
 
 ## 🧪 Testing
 
-The repository includes a comprehensive unit test suite running on Node's native test runner:
-- **LRU & TTL Eviction:** Tests capacity boundaries, least-recently-used eviction, and expiration.
-- **Telegram HTML Escaping:** Verifies complete neutralization of `&`, `<`, and `>` characters to prevent Telegram API `400 Bad Request` parse failures.
-
 ```bash
 npm test
 ```
+
+7 unit tests verify:
+- Bounded LRU Cache capacity and TTL expiration
+- Telegram HTML entity escaping (`&`, `<`, `>`)
+- Centralized MongoDB prediction caching and top stocks ranking
 
 ---
 

@@ -71,6 +71,40 @@ const envSchema = z.object({
     .enum(['development', 'production', 'test'])
     .optional()
     .default('development'),
+
+  // Sentry Observability
+  SENTRY_DSN: z
+    .string()
+    .optional()
+    .transform((val) => (val && val.trim().length > 0 ? val.trim() : undefined)),
+
+  // ElevenLabs Voice Alerts
+  ELEVENLABS_API_KEY: z
+    .string()
+    .optional()
+    .transform((val) => (val && val.trim().length > 0 ? val.trim() : undefined)),
+
+  ELEVENLABS_VOICE_ID: z
+    .string()
+    .optional()
+    .default('pNInz6obpgDQGcFmaJgB'), // Adam - authoritative news reader voice
+
+  ENABLE_VOICE_ALERTS: z
+    .string()
+    .optional()
+    .default('true')
+    .transform((val) => val.toLowerCase() === 'true' || val === '1'),
+
+  // Centralized MongoDB Prediction Storage
+  MONGODB_URI: z
+    .string()
+    .optional()
+    .transform((val) => (val && val.trim().length > 0 ? val.trim() : undefined)),
+
+  MONGODB_DATABASE: z
+    .string()
+    .optional()
+    .default('stock_news_alert'),
 });
 
 export function loadAndValidateConfig(): AppConfig {
@@ -104,6 +138,12 @@ export function loadAndValidateConfig(): AppConfig {
     port: data.PORT,
     enableHealthServer: data.ENABLE_HEALTH_SERVER,
     nodeEnv: data.NODE_ENV,
+    sentryDsn: data.SENTRY_DSN,
+    elevenlabsApiKey: data.ELEVENLABS_API_KEY,
+    elevenlabsVoiceId: data.ELEVENLABS_VOICE_ID,
+    enableVoiceAlerts: data.ENABLE_VOICE_ALERTS && !!data.ELEVENLABS_API_KEY,
+    mongodbUri: data.MONGODB_URI,
+    mongodbDatabaseName: data.MONGODB_DATABASE,
   };
 }
 

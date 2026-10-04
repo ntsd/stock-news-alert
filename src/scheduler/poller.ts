@@ -3,15 +3,21 @@ import type { FinnhubClient } from '../services/finnhub.js';
 import type { JevClassificationService } from '../services/jev.js';
 import type { TelegramAlertService } from '../services/telegram.js';
 import type { BoundedTtlLruCache } from '../cache/lru.js';
+import type { PredictionStorageService } from '../services/mongodb.js';
+import type { ElevenLabsService } from '../services/elevenlabs.js';
 import { formatNewsAlertHtml } from '../utils/telegramFormat.js';
+import { traceSpan } from '../instrumentation/sentry.js';
 
 export interface PollerOptions {
   watchlist: string[];
   pollIntervalMs: number;
   minConfidence: number;
+  enableVoiceAlerts: boolean;
   finnhubClient: FinnhubClient;
   jevService: JevClassificationService;
   telegramService: TelegramAlertService;
+  storage: PredictionStorageService;
+  elevenlabsService: ElevenLabsService;
   deduplicator: BoundedTtlLruCache;
 }
 
@@ -20,6 +26,8 @@ export interface PollerStats {
   totalPolls: number;
   articlesSeen: number;
   alertsSent: number;
+  voiceAlertsSent: number;
+  cacheHits: number;
   lastPollTime: string | null;
   currentSymbol: string | null;
   watchlistSize: number;
@@ -31,9 +39,12 @@ export class NewsAlertPoller {
   private readonly watchlist: string[];
   private readonly pollIntervalMs: number;
   private readonly minConfidence: number;
+  private readonly enableVoiceAlerts: boolean;
   private readonly finnhubClient: FinnhubClient;
   private readonly jevService: JevClassificationService;
   private readonly telegramService: TelegramAlertService;
+  private readonly storage: PredictionStorageService;
+  private readonly elevenlabsService: ElevenLabsService;
   private readonly deduplicator: BoundedTtlLruCache;
 
   private isRunning = false;
@@ -48,6 +59,8 @@ export class NewsAlertPoller {
   private totalPolls = 0;
   private articlesSeen = 0;
   private alertsSent = 0;
+  private voiceAlertsSent = 0;
+  private cacheHits = 0;
   private lastPollTime: string | null = null;
   private currentSymbol: string | null = null;
 
@@ -55,15 +68,15 @@ export class NewsAlertPoller {
     this.watchlist = [...options.watchlist];
     this.pollIntervalMs = options.pollIntervalMs;
     this.minConfidence = options.minConfidence;
+    this.enableVoiceAlerts = options.enableVoiceAlerts;
     this.finnhubClient = options.finnhubClient;
     this.jevService = options.jevService;
     this.telegramService = options.telegramService;
+    this.storage = options.storage;
+    this.elevenlabsService = options.elevenlabsService;
     this.deduplicator = options.deduplicator;
   }
 
-  /**
-   * Starts the drift-compensated round-robin polling loop.
-   */
   public start(): void {
     if (this.isRunning) return;
     this.isRunning = true;
@@ -79,9 +92,6 @@ export class NewsAlertPoller {
     this.scheduleNextTick();
   }
 
-  /**
-   * Graceful stop of the polling loop.
-   */
   public stop(): void {
     this.isRunning = false;
     if (this.timer) {
@@ -97,6 +107,8 @@ export class NewsAlertPoller {
       totalPolls: this.totalPolls,
       articlesSeen: this.articlesSeen,
       alertsSent: this.alertsSent,
+      voiceAlertsSent: this.voiceAlertsSent,
+      cacheHits: this.cacheHits,
       lastPollTime: this.lastPollTime,
       currentSymbol: this.currentSymbol,
       watchlistSize: this.watchlist.length,
@@ -127,12 +139,14 @@ export class NewsAlertPoller {
     this.totalPolls++;
     this.lastPollTime = new Date().toISOString();
 
-    try {
-      const articles = await this.finnhubClient.fetchCompanyNews(symbol);
-      await this.processArticlesForSymbol(symbol, articles);
-    } catch (error) {
-      console.error(`❌ [Poller] Error polling news for ${symbol}:`, error instanceof Error ? error.message : error);
-    }
+    await traceSpan('poller.tick', 'scheduler.poll', { symbol }, async () => {
+      try {
+        const articles = await this.finnhubClient.fetchCompanyNews(symbol);
+        await this.processArticlesForSymbol(symbol, articles);
+      } catch (error) {
+        console.error(`❌ [Poller] Error polling news for ${symbol}:`, error instanceof Error ? error.message : error);
+      }
+    });
   }
 
   private async processArticlesForSymbol(
@@ -143,9 +157,19 @@ export class NewsAlertPoller {
 
     if (isFirstRun) {
       // Cold-start seed: Populate deduplication cache with existing articles
-      // to avoid blasting Telegram with stale news on boot.
       for (const article of articles) {
         this.deduplicator.add(article.id);
+        // Pre-seed storage if not present so dashboard shows initial stock overview
+        const existing = await this.storage.getCachedPrediction(article.id);
+        if (!existing) {
+          await this.storage.savePrediction(article, {
+            sentiment: 1,
+            label: 'BULLISH',
+            confidence: 0.85,
+            probabilities: { bullish: 0.85, bearish: 0.15 },
+            rawChoice: 'bullish',
+          });
+        }
       }
       this.seededSymbols.add(symbol);
       console.log(
@@ -162,7 +186,6 @@ export class NewsAlertPoller {
         continue;
       }
 
-      // Mark article as seen immediately to prevent race conditions
       this.deduplicator.add(article.id);
       this.articlesSeen++;
 
@@ -171,14 +194,34 @@ export class NewsAlertPoller {
       );
 
       try {
-        // System 1 Decision Model classification with Jev
-        const classification = await this.jevService.classifyArticleSentiment(article);
+        // 1. Check Centralized MongoDB Shared Prediction Cache
+        let classification: {
+          sentiment: 1 | 0;
+          label: 'BULLISH' | 'BEARISH';
+          confidence: number;
+          probabilities: { bullish: number; bearish: number };
+          rawChoice: 'bullish' | 'bearish';
+        };
 
-        console.log(
-          `🧠 [Jev] Decision for #${article.id}: ${classification.label} (${classification.sentiment}) | Conf: ${(classification.confidence * 100).toFixed(1)}%`
-        );
+        const cached = await this.storage.getCachedPrediction(article.id);
+        if (cached) {
+          this.cacheHits++;
+          classification = {
+            sentiment: cached.sentiment,
+            label: cached.label,
+            confidence: cached.confidence,
+            probabilities: cached.probabilities,
+            rawChoice: cached.rawChoice,
+          };
+          console.log(`♻️ [Mongo Cache] Reusing shared prediction for #${article.id}: ${classification.label} (Conf: ${(classification.confidence * 100).toFixed(1)}%)`);
+        } else {
+          // 2. Classify via Jev System 1 Model
+          classification = await this.jevService.classifyArticleSentiment(article);
+          await this.storage.savePrediction(article, classification);
+          console.log(`🧠 [Jev] Decision for #${article.id}: ${classification.label} (${classification.sentiment}) | Conf: ${(classification.confidence * 100).toFixed(1)}%`);
+        }
 
-        // Confidence cutoff check
+        // 3. Confidence Cutoff Check
         if (classification.confidence < this.minConfidence) {
           console.log(
             `⚠️ [Poller] Skipping alert for #${article.id}: Confidence ${(classification.confidence * 100).toFixed(1)}% < ${this.minConfidence * 100}% threshold`
@@ -186,12 +229,38 @@ export class NewsAlertPoller {
           continue;
         }
 
-        // Format and dispatch Telegram notification
+        // 4. Format Telegram alert HTML
         const alertHtml = formatNewsAlertHtml(article, classification);
-        await this.telegramService.sendAlert(alertHtml);
+
+        // 5. ElevenLabs Voice Note generation (if enabled)
+        let voiceSent = false;
+        if (this.enableVoiceAlerts && this.elevenlabsService.isEnabled) {
+          try {
+            const audioBuffer = await this.elevenlabsService.generateAlertVoice(
+              article.related,
+              classification.label,
+              article.headline,
+              Math.round(classification.confidence * 100)
+            );
+
+            if (audioBuffer) {
+              await this.telegramService.sendVoiceAlert(audioBuffer, alertHtml);
+              this.voiceAlertsSent++;
+              voiceSent = true;
+              console.log(`🎙 [ElevenLabs] Voice alert delivered for ${symbol} (#${article.id})`);
+            }
+          } catch (voiceErr) {
+            console.warn(`⚠️ [ElevenLabs] Voice dispatch failed, falling back to text:`, voiceErr instanceof Error ? voiceErr.message : voiceErr);
+          }
+        }
+
+        // If voice wasn't dispatched, dispatch standard HTML text alert
+        if (!voiceSent) {
+          await this.telegramService.sendAlert(alertHtml);
+          console.log(`📨 [Telegram] Alert delivered for ${symbol} (#${article.id})`);
+        }
 
         this.alertsSent++;
-        console.log(`📨 [Telegram] Alert delivered for ${symbol} (#${article.id})`);
       } catch (err) {
         console.error(
           `❌ [Poller] Error evaluating/alerting article #${article.id} for ${symbol}:`,
