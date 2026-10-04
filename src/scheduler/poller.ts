@@ -340,10 +340,9 @@ export class NewsAlertPoller {
         const alertHtml = formatNewsAlertHtml(article, classification);
 
         if (this.telegramService.isEnabled) {
-          // 5. ElevenLabs Voice Note generation (only for BREAKING_CRITICAL and NOTABLE_CATALYST)
+          // 5. ElevenLabs Voice Note generation (breaking news only; catalysts use text)
           let voiceSent = false;
-          const isVoiceEligible =
-            classification.priority === 'BREAKING_CRITICAL' || classification.priority === 'NOTABLE_CATALYST';
+          const isVoiceEligible = classification.priority === 'BREAKING_CRITICAL';
 
           if (this.enableVoiceAlerts && this.elevenlabsService.isEnabled && isVoiceEligible) {
             try {

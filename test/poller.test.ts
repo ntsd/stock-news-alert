@@ -42,8 +42,28 @@ function setup(t: TestContext, storage = new PredictionStorageService(), history
   });
   // Exercise one scheduler iteration without starting a background timer.
   Object.assign(poller, { isRunning: true });
-  return { poller, storage, fetchNews, classify, sendAlert, tick: () => poller['tick']() };
+  return { poller, telegram, storage, fetchNews, classify, sendAlert, tick: () => poller['tick']() };
 }
+
+describe('Breaking-only Telegram voice', () => {
+  for (const priority of ['BREAKING_CRITICAL', 'NOTABLE_CATALYST'] as const) {
+    it(`delivers ${priority} via the correct voice or text channel`, async (t) => {
+      const storage = new PredictionStorageService();
+      await storage.setSyncRange('AAPL', '2025-01-01', new Date().toISOString().split('T')[0]!);
+      const s = setup(t, storage);
+      const elevenlabs = new ElevenLabsService('test');
+      Object.assign(s.poller, { enableVoiceAlerts: true, elevenlabsService: elevenlabs });
+      s.fetchNews.mock.mockImplementation(async () => [article(77, new Date().toISOString())]);
+      s.classify.mock.mockImplementation(async () => ({ ...result, priority }));
+      const generate = t.mock.method(elevenlabs, 'generateAlertVoice', async () => Buffer.from('voice'));
+      const voice = t.mock.method(s.telegram, 'sendVoiceAlert', async () => {});
+      await s.tick();
+      assert.equal(generate.mock.callCount(), priority === 'BREAKING_CRITICAL' ? 1 : 0);
+      assert.equal(voice.mock.callCount(), priority === 'BREAKING_CRITICAL' ? 1 : 0);
+      assert.equal(s.sendAlert.mock.callCount(), priority === 'NOTABLE_CATALYST' ? 1 : 0);
+    });
+  }
+});
 
 describe('NewsAlertPoller scheduling', () => {
   it('waits a full interval after a slow tick instead of catching up in a burst', async (t) => {

@@ -153,10 +153,18 @@ export function createWebServer(options: WebServerOptions): http.Server {
         const fromDate = url.searchParams.get('fromDate') || undefined;
         const toDate = url.searchParams.get('toDate') || undefined;
         const sortBy = (url.searchParams.get('sortBy') as 'date' | 'impact' | 'confidence') || 'date';
-        const limit = Number.parseInt(url.searchParams.get('limit') || '50', 10);
+        const limit = Number(url.searchParams.get('limit') ?? '50');
+        const offset = Number(url.searchParams.get('offset') ?? '0');
+        if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200
+          || !Number.isSafeInteger(offset) || offset < 0 || offset > 1000000) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'limit must be 1–200 and offset must be 0–1000000 integers' }));
+          return;
+        }
 
         const news = await storage.getRecentNews({
-          limit,
+          limit: limit + 1,
+          offset,
           symbol,
           symbols,
           sentiment,
@@ -167,7 +175,7 @@ export function createWebServer(options: WebServerOptions): http.Server {
           sortBy,
         });
         res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache' });
-        res.end(JSON.stringify({ news }));
+        res.end(JSON.stringify({ news: news.slice(0, limit), hasMore: news.length > limit, offset, limit }));
         return;
       }
 
@@ -182,14 +190,13 @@ export function createWebServer(options: WebServerOptions): http.Server {
           return;
         }
 
-        // ElevenLabs is only permitted for notable catalysts and breaking critical events
-        const isVoiceEligible =
-          article.priority === 'BREAKING_CRITICAL' || article.priority === 'NOTABLE_CATALYST';
+        // Enforce eligibility before reading even previously cached catalyst audio.
+        const isVoiceEligible = article.priority === 'BREAKING_CRITICAL';
         if (!isVoiceEligible) {
           res.writeHead(403, { 'Content-Type': 'application/json' });
           res.end(
             JSON.stringify({
-              error: 'Audio voice synthesis is only available for breaking critical and notable catalyst news.',
+              error: 'Audio voice synthesis is only available for breaking critical news.',
             })
           );
           return;
@@ -1463,6 +1470,7 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
       width: 100%;
       height: 100%;
       position: relative;
+      z-index: 0;
     }
 
     .chart-empty-state {
@@ -1479,6 +1487,7 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
     .news-dot-layer {
       position: absolute;
       inset: 0;
+      z-index: 3;
       pointer-events: none;
       overflow: hidden;
     }
@@ -1778,6 +1787,11 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
       <div class="news-list" id="newsList">
         <div class="empty-state">Polling live breaking news...</div>
       </div>
+      <nav class="news-pagination" aria-label="News feed pagination">
+        <button class="page-btn" id="newsPrev" onclick="changeNewsPage(-1)" disabled>← Previous</button>
+        <span class="page-info" id="newsPageInfo" role="status" aria-live="polite">Page 1</span>
+        <button class="page-btn" id="newsNext" onclick="changeNewsPage(1)" disabled>Next →</button>
+      </nav>
     </div>
 
     <!-- View 2: Dedicated Symbol Detail Page (Price Chart + Published News Dots + Filterable News) -->
@@ -2196,7 +2210,7 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
           if (n.priority === 'BREAKING_CRITICAL') priorityLabel = '🔥 BREAKING CRITICAL';
           else if (n.priority === 'NOTABLE_CATALYST') priorityLabel = '⚡ NOTABLE CATALYST';
 
-          const isVoiceEligible = n.priority === 'BREAKING_CRITICAL' || n.priority === 'NOTABLE_CATALYST';
+          const isVoiceEligible = n.priority === 'BREAKING_CRITICAL';
           const audioButtonHtml = isVoiceEligible
             ? ('<button class="audio-btn" onclick="playVoice(' + n._id + ', this)">🎙 Listen Voice</button>')
             : '';
@@ -2245,11 +2259,22 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
       }
     }
 
-    // News Feed
-    async function fetchNews() {
+    // News Feed: server-side pagination covers the whole history, not just a cached subset.
+    const NEWS_PAGE_SIZE = 10;
+    let newsPage = 0;
+    let newsRequest = 0;
+
+    function changeNewsPage(direction) {
+      fetchNews(Math.max(0, newsPage + direction));
+      document.getElementById('newsList').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+
+    async function fetchNews(page = 0) {
+      newsPage = page;
+      const request = ++newsRequest;
       try {
         const dateParams = getDateParams();
-        let url = '/api/news?limit=40';
+        let url = '/api/news?limit=' + NEWS_PAGE_SIZE + '&offset=' + page * NEWS_PAGE_SIZE;
 
         // Filter symbols
         if (singleSymbolFilter) {
@@ -2275,8 +2300,16 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
         }
 
         const res = await fetch(url);
+        if (!res.ok) throw new Error('News request failed');
         const data = await res.json();
+        if (request !== newsRequest) return;
+        // Data may change during live polling; recover if the last page disappeared.
+        if (data.news.length === 0 && page > 0) return fetchNews(page - 1);
         const container = document.getElementById('newsList');
+        document.getElementById('newsPrev').disabled = page === 0;
+        document.getElementById('newsNext').disabled = !data.hasMore;
+        document.getElementById('newsPageInfo').textContent = 'Page ' + (page + 1)
+          + (data.news.length ? ' · Articles ' + (page * NEWS_PAGE_SIZE + 1) + '–' + (page * NEWS_PAGE_SIZE + data.news.length) : ' · No articles');
 
         if (!data.news || data.news.length === 0) {
           container.innerHTML = '<div class="empty-state">No news articles match your filter criteria and date range.</div>';
@@ -2301,7 +2334,7 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
           }
 
           const urgencyPct = Math.round((n.urgencyScore ?? 0) * 100);
-          const isVoiceEligible = n.priority === 'BREAKING_CRITICAL' || n.priority === 'NOTABLE_CATALYST';
+          const isVoiceEligible = n.priority === 'BREAKING_CRITICAL';
           const audioButtonHtml = isVoiceEligible
             ? ('<button class="audio-btn" onclick="playVoice(' + n._id + ', this)">🎙 Listen with ElevenLabs</button>')
             : '';
@@ -2460,11 +2493,18 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
     let priceSeries = null;
     let chartCandles = [];
     let newsDots = [];
+    let hoveredNewsId = null;
 
     function initPriceChart() {
       if (priceChart || typeof LightweightCharts === 'undefined') return false;
       const container = document.getElementById('priceChartContainer');
       if (!container) return false;
+      // The hovered element may be replaced during refresh without a mouseleave event.
+      const wrap = document.getElementById('chartCanvasWrap');
+      wrap.addEventListener('pointermove', event => {
+        if (!event.target.closest('.news-dot')) hideNewsDotTooltip();
+      });
+      wrap.addEventListener('pointerleave', () => hideNewsDotTooltip());
 
       priceChart = LightweightCharts.createChart(container, {
         layout: {
@@ -2498,11 +2538,11 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
       });
 
       // Reposition news dots whenever the visible time range changes (scroll/zoom)
-      priceChart.timeScale().subscribeVisibleTimeRangeChange(() => positionNewsDots());
+      priceChart.timeScale().subscribeVisibleLogicalRangeChange(() => positionNewsDots());
 
       new ResizeObserver(() => {
         priceChart && priceChart.applyOptions({ width: container.clientWidth, height: container.clientHeight });
-        positionNewsDots();
+        requestAnimationFrame(positionNewsDots);
       }).observe(container);
 
       return true;
@@ -2513,8 +2553,16 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
       const dotLayer = document.getElementById('newsDotLayer');
       if (!container || !dotLayer) return;
 
-      chartCandles = (data.candles || []).filter(c => c.close != null && c.timestamp != null);
-      const news = data.news || [];
+      // Clear stale dots before setData/fitContent can trigger chart callbacks.
+      newsDots = [];
+      dotLayer.innerHTML = '';
+      hideNewsDotTooltip(false);
+      chartCandles = [...new Map((data.candles || [])
+        .filter(c => Number.isFinite(c.close) && Number.isFinite(c.timestamp))
+        .map(c => [Math.floor(c.timestamp / 1000), { ...c, timestamp: Math.floor(c.timestamp / 1000) * 1000 }])).values()]
+        .sort((a, b) => a.timestamp - b.timestamp);
+      const news = (data.news || []).filter(n =>
+        n.priority === 'BREAKING_CRITICAL' || n.priority === 'NOTABLE_CATALYST');
 
       // initPriceChart() returns false only when the library is missing or the
       // container is absent; an already-created chart is a no-op, not an error.
@@ -2525,6 +2573,7 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
 
       if (chartCandles.length === 0) {
         priceSeries.setData([]);
+        hideNewsDotTooltip();
         dotLayer.innerHTML = '<div class="chart-empty-state">No historical price candles available for this asset & range.</div>';
         return;
       }
@@ -2548,59 +2597,60 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
       priceChart.timeScale().fitContent();
 
       // Build news event dots as positioned HTML overlays
-      newsDots = [];
-      dotLayer.innerHTML = '';
       news.forEach(n => {
         const tMs = new Date(n.publishedAt).getTime();
+        if (!Number.isFinite(tMs)) return;
+        // Markets close; news does not. Anchor weekend/after-hours events to the
+        // nearest available price without changing their true publication timestamp.
+        const anchorMs = Math.max(chartCandles[0].timestamp,
+          Math.min(chartCandles[chartCandles.length - 1].timestamp, tMs));
+        const nextIndex = chartCandles.findIndex(c => c.timestamp >= anchorMs);
+        const leftIndex = Math.max(0, nextIndex - 1);
+        const rightIndex = nextIndex;
+        const left = chartCandles[leftIndex];
+        const right = chartCandles[rightIndex];
+        const ratio = leftIndex === rightIndex ? 0 : (anchorMs - left.timestamp) / (right.timestamp - left.timestamp);
         const el = document.createElement('div');
         el.className = 'news-dot ' + (n.sentiment === 1 ? 'bullish' : 'bearish')
           + (n.priority === 'BREAKING_CRITICAL' ? ' breaking' : n.priority === 'NOTABLE_CATALYST' ? ' catalyst' : '');
         el.title = n.headline;
         el.dataset.priority = n.priority || '';
         el.dataset.sentiment = String(n.sentiment);
+        if (anchorMs !== tMs) el.dataset.priceAnchor = new Date(anchorMs).toISOString();
 
         el.addEventListener('mouseenter', () => showNewsDotTooltip(el, n));
         el.addEventListener('mouseleave', hideNewsDotTooltip);
         el.addEventListener('click', () => jumpToNewsArticle(n._id));
 
         dotLayer.appendChild(el);
-        newsDots.push({ el, timeSec: Math.floor(tMs / 1000), price: priceAtTime(tMs), news: n });
+        el.dataset.price = String(left.close + ratio * (right.close - left.close));
+        newsDots.push({ el, leftIndex, rightIndex, ratio, news: n });
       });
 
-      // Defer positioning until the chart has finished its first layout pass
+      // Position immediately too: requestAnimationFrame is paused in hidden tabs.
+      positionNewsDots();
+      // Reposition once the chart has finished its layout pass.
       requestAnimationFrame(() => {
         positionNewsDots();
         updateChartDotVisibility();
       });
     }
 
-    // Interpolate the close price at a given timestamp (ms) from the candle series
-    function priceAtTime(t) {
-      if (chartCandles.length === 0) return null;
-      if (t <= chartCandles[0].timestamp) return chartCandles[0].close;
-      if (t >= chartCandles[chartCandles.length - 1].timestamp) return chartCandles[chartCandles.length - 1].close;
-      for (let i = 0; i < chartCandles.length - 1; i++) {
-        const c1 = chartCandles[i];
-        const c2 = chartCandles[i + 1];
-        if (t >= c1.timestamp && t <= c2.timestamp) {
-          const ratio = (t - c1.timestamp) / (c2.timestamp - c1.timestamp);
-          return c1.close + ratio * (c2.close - c1.close);
-        }
-      }
-      return chartCandles[chartCandles.length - 1].close;
-    }
-
     function positionNewsDots() {
       if (!priceChart || !priceSeries) return;
       const timeScale = priceChart.timeScale();
-      const first = chartCandles.length ? chartCandles[0].timestamp / 1000 : 0;
-      const last = chartCandles.length ? chartCandles[chartCandles.length - 1].timestamp / 1000 : 0;
 
       newsDots.forEach(dot => {
-        // Clamp to the candle window so dots sit on the price line
-        const t = Math.max(first, Math.min(last, dot.timeSec));
-        const x = timeScale.timeToCoordinate(t);
-        const y = dot.price != null ? priceSeries.priceToCoordinate(dot.price) : null;
+        // timeToCoordinate only resolves actual bars. Interpolate screen coordinates
+        // between those bars so intrabar/weekend events stay on the rendered line.
+        const left = chartCandles[dot.leftIndex];
+        const right = chartCandles[dot.rightIndex];
+        const x1 = timeScale.timeToCoordinate(left.timestamp / 1000);
+        const x2 = timeScale.timeToCoordinate(right.timestamp / 1000);
+        const y1 = priceSeries.priceToCoordinate(left.close);
+        const y2 = priceSeries.priceToCoordinate(right.close);
+        const x = x1 == null || x2 == null ? null : x1 + dot.ratio * (x2 - x1);
+        const y = y1 == null || y2 == null ? null : y1 + dot.ratio * (y2 - y1);
         // Store out-of-range flag; visibility filtering is handled by updateChartDotVisibility()
         dot.outOfRange = (x == null || y == null);
         if (!dot.outOfRange) {
@@ -2638,12 +2688,19 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
         }
         dot.el.style.display = visible ? 'block' : 'none';
       });
+      // Recreated dots must retain the active tooltip during the four-second refresh.
+      if (hoveredNewsId != null) {
+        const hovered = newsDots.find(dot => dot.news._id === hoveredNewsId && dot.el.style.display !== 'none');
+        if (hovered) showNewsDotTooltip(hovered.el, hovered.news);
+        else hideNewsDotTooltip();
+      }
     }
 
     function showNewsDotTooltip(el, n) {
       const tooltip = document.getElementById('chartDotTooltip');
       const wrap = document.getElementById('chartCanvasWrap');
       if (!tooltip || !wrap) return;
+      hoveredNewsId = n._id;
 
       const isBull = n.sentiment === 1;
       const sentColor = isBull ? '#34D399' : '#F87171';
@@ -2670,6 +2727,7 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
           <span style="font-size:10px; color:#94A3B8;">\${timeStr}</span>
         </div>
         <div style="font-weight:600; font-size:13px; color:#F8FAFC; line-height:1.4; margin-bottom:10px;">\${n.headline}</div>
+        \${el.dataset.priceAnchor ? '<div style="font-size:10px; color:#94A3B8; margin-bottom:8px;">Outside price history · anchored to price bar at ' + new Date(el.dataset.priceAnchor).toLocaleString() + '</div>' : ''}
         <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:6px; margin-bottom:10px;">
           <div style="background:rgba(255,255,255,0.04); border-radius:7px; padding:5px 8px; text-align:center;">
             <div style="font-size:9px; color:#64748B; text-transform:uppercase; letter-spacing:0.3px;">Signal</div>
@@ -2711,7 +2769,8 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
       tooltip.style.display = 'block';
     }
 
-    function hideNewsDotTooltip() {
+    function hideNewsDotTooltip(resetHover = true) {
+      if (resetHover) hoveredNewsId = null;
       const tooltip = document.getElementById('chartDotTooltip');
       if (tooltip) tooltip.style.display = 'none';
     }
@@ -2848,7 +2907,7 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
         }
 
         const urgencyPct = Math.round((n.urgencyScore ?? 0) * 100);
-        const isVoiceEligible = n.priority === 'BREAKING_CRITICAL' || n.priority === 'NOTABLE_CATALYST';
+        const isVoiceEligible = n.priority === 'BREAKING_CRITICAL';
         const audioButtonHtml = isVoiceEligible
           ? ('<button class="audio-btn" onclick="playVoice(' + n._id + ', this)">🎙 Listen with ElevenLabs</button>')
           : '';
@@ -2977,7 +3036,7 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
     function triggerManualRefresh() {
       fetchTopStocks();
       fetchTopNews();
-      fetchNews();
+      fetchNews(newsPage);
       if (activeSymbol) {
         loadSymbolData(activeSymbol, currentChartRange);
       }
@@ -3008,7 +3067,7 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
     setInterval(() => {
       fetchTopStocks();
       fetchTopNews();
-      fetchNews();
+      fetchNews(newsPage);
       if (activeSymbol) {
         loadSymbolData(activeSymbol, currentChartRange);
       }

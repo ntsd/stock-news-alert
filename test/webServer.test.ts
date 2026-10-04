@@ -1,6 +1,7 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import { runInNewContext } from 'node:vm';
 import { createWebServer } from '../src/server/webServer.js';
 import { PredictionStorageService } from '../src/services/mongodb.js';
 import { ElevenLabsService } from '../src/services/elevenlabs.js';
@@ -214,6 +215,25 @@ describe('Web Server & API Endpoints', () => {
     assert.equal(pastRes.data.news.length, 0);
   });
 
+  it('paginates the full filtered news feed and identifies the last page', async () => {
+    const first = await get('/api/news?sortBy=impact&limit=1&symbols=NVDA,AAPL');
+    assert.equal(first.status, 200);
+    assert.deepEqual(first.data.news.map((n: any) => n._id), [7001]);
+    assert.equal(first.data.hasMore, true);
+    const second = await get('/api/news?sortBy=impact&limit=1&offset=1&symbols=NVDA,AAPL');
+    assert.deepEqual(second.data.news.map((n: any) => n._id), [7002]);
+    assert.equal(second.data.hasMore, false);
+    const empty = await get('/api/news?limit=1&offset=3');
+    assert.deepEqual(empty.data.news, []);
+    assert.equal(empty.data.hasMore, false);
+  });
+
+  it('rejects invalid pagination arguments', async () => {
+    for (const query of ['offset=-1', 'offset=abc', 'offset=1.5', 'offset=1000001', 'limit=0', 'limit=201']) {
+      assert.equal((await get('/api/news?' + query)).status, 400);
+    }
+  });
+
   it('should render the dashboard HTML with interest symbol filters and impact controls', async () => {
     const res = await get('/');
     assert.equal(res.status, 200);
@@ -222,14 +242,85 @@ describe('Web Server & API Endpoints', () => {
     assert.ok(res.raw.includes('Top Impact News on Watched Symbols'));
     assert.ok(res.raw.includes('Highest Impact (Urgency Score)'));
     assert.ok(res.raw.includes('3D (Default)'));
-    // Verify UI contains logic to only show audio button for breaking critical & notable catalyst
-    assert.ok(res.raw.includes("n.priority === 'BREAKING_CRITICAL' || n.priority === 'NOTABLE_CATALYST'"));
+    assert.ok(res.raw.includes('aria-label="News feed pagination"'));
+    assert.match(res.raw, /#priceChartContainer\s*\{[^}]*z-index: 0;/);
+    assert.match(res.raw, /\.news-dot-layer\s*\{[^}]*z-index: 3;/);
+    assert.ok(res.raw.includes('fetchNews(newsPage)'));
+    assert.equal((res.raw.match(/const isVoiceEligible = n.priority === 'BREAKING_CRITICAL';/g) || []).length, 3);
+    assert.ok(!res.raw.includes("const isVoiceEligible = n.priority === 'BREAKING_CRITICAL' ||"));
+  });
+
+  it('positions eligible chart dots between real bars and clears stale dots on empty data', async () => {
+    const res = await get('/');
+    const source = res.raw.slice(res.raw.indexOf('let priceChart = null;'), res.raw.indexOf('function showNewsDotTooltip'));
+    const dotLayer = { innerHTML: '', appendChild() {} };
+    const container = { clientWidth: 500, clientHeight: 300 };
+    const context: any = {
+      document: {
+        getElementById: (id: string) => id === 'priceChartContainer' ? container : dotLayer,
+        createElement: () => ({ style: {}, dataset: {}, addEventListener() {} }),
+      },
+      requestAnimationFrame: (fn: () => void) => fn(),
+      tooltipIds: [],
+      showNewsDotTooltip(_el: unknown, news: { _id: number }) { context.tooltipIds.push(news._id); },
+      hideNewsDotTooltip() {}, symbolNewsFilter: 'all', symbolNewsSearch: '', currentChartRange: '7d',
+      data: {
+        // Deliberately unsorted; duplicate bars must not crash Lightweight Charts.
+        candles: [{ timestamp: 2000000, close: 120 }, { timestamp: 1000000, close: 100 }, { timestamp: 2000000, close: 120 }],
+        news: [
+          { _id: 1, priority: 'BREAKING_CRITICAL', publishedAt: new Date(1500000).toISOString(), sentiment: 1 },
+          { _id: 2, priority: 'NOTABLE_CATALYST', publishedAt: new Date(1750000).toISOString(), sentiment: 0 },
+          { _id: 3, priority: 'ROUTINE_NOISE', publishedAt: new Date(1500000).toISOString() },
+          { _id: 4, priority: 'BREAKING_CRITICAL', publishedAt: new Date(500000).toISOString() },
+          { _id: 5, priority: 'NOTABLE_CATALYST', publishedAt: new Date(3000000).toISOString() },
+        ],
+      },
+    };
+    runInNewContext(source + `
+      const times = new Map([[1000, 10], [2000, 110]]);
+      priceChart = { applyOptions() {}, timeScale: () => ({
+        fitContent() {}, timeToCoordinate: t => times.get(t) ?? null,
+      }) };
+      priceSeries = { setData() {}, priceToCoordinate: p => 300 - p };
+      renderPriceChart(data);
+      output = newsDots.map(d => ({id: d.news._id, x: d.el.style.left, y: d.el.style.top, display: d.el.style.display}));
+      anchors = newsDots.filter(d => d.el.dataset.priceAnchor).map(d => ({id: d.news._id, anchor: d.el.dataset.priceAnchor, published: d.news.publishedAt}));
+      symbolNewsFilter = 'catalyst'; updateChartDotVisibility();
+      filtered = newsDots.map(d => d.el.style.display);
+      hoveredNewsId = 2;
+      renderPriceChart(data);
+      restoredHover = hoveredNewsId;
+      renderPriceChart({ candles: [], news: [] });
+      remaining = newsDots.length;
+    `, context);
+    assert.equal(JSON.stringify(context.output), JSON.stringify([
+      { id: 1, x: '60px', y: '190px', display: 'block' },
+      { id: 2, x: '85px', y: '185px', display: 'block' },
+      { id: 4, x: '10px', y: '200px', display: 'block' },
+      { id: 5, x: '110px', y: '180px', display: 'block' },
+    ]));
+    assert.equal(JSON.stringify(context.filtered), JSON.stringify(['none', 'block', 'none', 'block']));
+    assert.equal(context.anchors[1].anchor, new Date(2000000).toISOString());
+    assert.equal(context.anchors[1].published, new Date(3000000).toISOString());
+    assert.equal(context.restoredHover, 2);
+    assert.ok(context.tooltipIds.length > 0);
+    assert.ok(context.tooltipIds.every((id: number) => id === 2));
+    assert.equal(context.remaining, 0);
+  });
+
+  it('rejects catalyst audio even when previously cached, but plays cached breaking audio', async () => {
+    await storage.saveAudio(7002, Buffer.from('old-catalyst-audio'));
+    assert.equal((await get('/api/audio/7002')).status, 403);
+    await storage.saveAudio(7001, Buffer.from('breaking-audio'));
+    const breaking = await get('/api/audio/7001');
+    assert.equal(breaking.status, 200);
+    assert.equal(breaking.raw, 'breaking-audio');
   });
 
   it('should reject /api/audio/:id with 403 Forbidden for ROUTINE_NOISE articles', async () => {
     const res = await get('/api/audio/7003');
     assert.equal(res.status, 403);
-    assert.ok(res.data.error.includes('only available for breaking critical and notable catalyst news'));
+    assert.ok(res.data.error.includes('only available for breaking critical news'));
   });
 
   it('should return real-time price quote at /api/quote/:symbol', async () => {

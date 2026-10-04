@@ -93,7 +93,7 @@ The service embeds a dark-mode web application and REST API:
 
 * **Dedicated Symbol Pages (`/symbol/:symbol`):**
   - **TradingView Lightweight Charts Price Chart:** High-performance interactive chart with `24H`, `7D`, `30D`, `90D`, `1Y` range selector powered by [`lightweight-charts`](https://github.com/tradingview/lightweight-charts).
-  - **Published News Dots on Chart:** Each news publication event is plotted directly on the price line with sentiment-coded overlay markers: 🟢 **Emerald Green** for Bullish signals, 🔴 **Rose Red** for Bearish signals, and a glowing outer halo for 🔥 **Breaking Critical** catalysts.
+    - **Published News Dots on Chart:** Breaking and notable catalyst events are plotted on the price line, interpolated between bars: 🟢 **Emerald Green** for Bullish signals, 🔴 **Rose Red** for Bearish signals, and a glowing outer halo for 🔥 **Breaking Critical** news. News outside available price history (such as weekend news after Friday's close) anchors to the nearest price bar; tooltips retain the true publication time and identify the price anchor. Routine news remains in the list without chart dots.
   - **Rich Hover Tooltips:** Hovering over any dot opens a frosted-glass tooltip card showing headline, priority badge, sentiment signal, confidence %, impact %, bull/bear probability split, and a click-to-jump CTA. Smart edge-detection flips the tooltip below the dot when near the top of the chart.
   - **Click-to-Jump Navigation:** Clicking a dot automatically navigates to the correct pagination page and smooth-scrolls to the article with an animated neon highlight flash.
   - **Unified Filter Bar (Chart + News):** A single filter strip above the chart controls both dot visibility and the news list simultaneously — filter by `All`, `🔥 Breaking`, `⚡ Catalysts`, `🟢 Bullish`, `🔴 Bearish`. Sort by Latest, Highest Urgency, or Confidence. Inline headline search.
@@ -103,7 +103,7 @@ The service embeds a dark-mode web application and REST API:
 * **Top Impact News Spotlight:** Dedicated hero spotlight section (`/api/top-news`) highlighting high-urgency catalysts and breaking announcements across your selected interest symbols.
 * **Order by Impact / Urgency:** Sort breaking news by TypeSafe Jev `urgencyScore` (Impact), chronological date, or model confidence.
 * **Dynamic Date Range Filtering:** Quick date range selectors (`3D` default, `24H`, `7D`, `30D`, `1Y`) and custom date range pickers.
-* **ElevenLabs Audio Playback:** Click "🎙 Listen with ElevenLabs" on high-impact cards (`BREAKING_CRITICAL` and `NOTABLE_CATALYST`) to stream voice synthesis directly in the browser with live animated audio waves.
+* **ElevenLabs Audio Playback:** Click "🎙 Listen with ElevenLabs" on breaking news cards (`BREAKING_CRITICAL` only) to stream voice synthesis directly in the browser with live animated audio waves. Catalyst alerts are text-only.
 * **Render Telemetry:** Live health status (`/health`), rate-limit consumption (~27 req/min), and cache hit metrics.
 
 ---
@@ -120,7 +120,7 @@ The service embeds a dark-mode web application and REST API:
    - Predictions and synthesized ElevenLabs MP3 binaries are persisted in MongoDB Atlas, sharing model decisions and audio buffers across instances.
    - Falls back gracefully to an in-memory store if `MONGODB_URI` is omitted.
 3. **ElevenLabs Voice Alerts via Telegram `sendVoice`:**
-   - High-confidence alerts (`BREAKING_CRITICAL` and `NOTABLE_CATALYST` only) generate audio broadcasts via ElevenLabs' low-latency `eleven_turbo_v2_5` model, sent as voice memos with HTML captions.
+    - High-confidence breaking alerts (`BREAKING_CRITICAL` only) generate audio broadcasts via ElevenLabs' low-latency `eleven_turbo_v2_5` model, sent as voice memos with HTML captions. Notable catalysts continue to receive text alerts.
 4. **Sentry Agent Tracing:**
    - Instruments OpenTelemetry trace spans across Jev decisions, Finnhub polling, and ElevenLabs audio generation to monitor decision latency and token efficiency.
 5. **Dynamic Incremental Sync & Historical Backfill (`HISTORY_SYNC_DAYS`):**

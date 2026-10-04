@@ -31,6 +31,7 @@ export interface StoredArticle {
 
 export interface NewsQueryOptions {
   limit?: number;
+  offset?: number;
   symbol?: string;
   symbols?: string[];
   sentiment?: 1 | 0;
@@ -366,6 +367,9 @@ export class PredictionStorageService {
           };
 
     const limit = opts.limit ?? 50;
+    // ponytail: offset pagination scans skipped rows and live inserts can shift pages;
+    // use compound sort-key cursors if history size or snapshot consistency requires it.
+    const offset = opts.offset ?? 0;
     const sortMode = opts.sortBy ?? 'date';
 
     if (this.collection) {
@@ -395,14 +399,15 @@ export class PredictionStorageService {
 
       const sortQuery: Record<string, 1 | -1> =
         sortMode === 'impact'
-          ? { urgencyScore: -1, confidence: -1, publishedAt: -1 }
+          ? { urgencyScore: -1, confidence: -1, publishedAt: -1, _id: -1 }
           : sortMode === 'confidence'
-            ? { confidence: -1, publishedAt: -1 }
-            : { publishedAt: -1, createdAt: -1 };
+            ? { confidence: -1, publishedAt: -1, _id: -1 }
+            : { publishedAt: -1, createdAt: -1, _id: -1 };
 
       return await this.collection
         .find(query)
         .sort(sortQuery)
+        .skip(offset)
         .limit(limit)
         .toArray();
     }
@@ -442,18 +447,19 @@ export class PredictionStorageService {
         const scoreB = b.urgencyScore ?? (b.priority === 'BREAKING_CRITICAL' ? 0.95 : b.priority === 'NOTABLE_CATALYST' ? 0.6 : 0.1);
         if (scoreB !== scoreA) return scoreB - scoreA;
         if (b.confidence !== a.confidence) return b.confidence - a.confidence;
-        return new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime();
+        return new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime() || b._id - a._id;
       });
     } else if (sortMode === 'confidence') {
       items.sort((a, b) => {
         if (b.confidence !== a.confidence) return b.confidence - a.confidence;
-        return new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime();
+        return new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime() || b._id - a._id;
       });
     } else {
-      items.sort((a, b) => new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime());
+      items.sort((a, b) => new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime()
+        || new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime() || b._id - a._id);
     }
 
-    return items.slice(0, limit);
+    return items.slice(offset, offset + limit);
   }
 
   /**
