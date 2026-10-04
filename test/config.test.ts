@@ -44,12 +44,13 @@ describe('Environment Configuration & Validation', () => {
     for (const value of ['8', '365', '1.5', '7days', '']) {
       assert.equal(envSchema.safeParse({ ...baseValidEnv, HISTORY_SYNC_DAYS: value }).success, false);
     }
-    // 0 is invalid (< 1 day)
+    // 0 disables historical sync.
     const zeroResult = envSchema.safeParse({
       ...baseValidEnv,
       HISTORY_SYNC_DAYS: '0',
     });
-    assert.equal(zeroResult.success, false);
+    assert.equal(zeroResult.success, true);
+    if (zeroResult.success) assert.equal(zeroResult.data.HISTORY_SYNC_DAYS, 0);
 
     // Negative is invalid
     const negResult = envSchema.safeParse({

@@ -186,14 +186,14 @@ These optional variables allow you to customize scheduling pace and watchlist sc
 | `WATCHLIST` | 12 tech & ADR tickers | Comma-separated list of symbols (e.g. `AAPL,NVDA,TSLA,MSFT`) |
 | `POLL_INTERVAL_MS` | `2000` | Paced tick interval in ms (2000ms = 30 req/min, free cap: 60/min) |
 | `MIN_CONFIDENCE` | `0.50` | Minimum confidence cutoff to filter out ambiguous headlines |
-| `HISTORY_SYNC_DAYS`| `7` | Recent news sync lookback (integer 1–7 days); scheduler caps lookback at seven days even after downtime. Price history and archive retention are unaffected. |
+| `HISTORY_SYNC_DAYS`| `7` | Integer 0–7: `0` polls today's news in live alert mode without history sync or cold-start Mongo reevaluation; 1–7 enables recent news sync. Price history and archive retention are unaffected. |
 | `PORT` | `3000` | Port for the live web dashboard & health check API |
 | `ENABLE_HEALTH_SERVER` | `true` | Serves dashboard UI and `/health` monitoring route |
 | `NODE_ENV` | `production` | Node execution environment |
 
 News UI presets are `24H`, `3D` (default), and `7D`, with `Custom` restricted to the most recent seven days. Price chart ranges remain `24H`, `7D`, `30D`, `90D`, and `1Y`, independent of the news limit.
 
-**Render deployment:** Set or override `HISTORY_SYNC_DAYS=7` in the service's environment settings. Existing values above 7 must be changed to an integer from 1 to 7 before deploying; a default does not replace an existing environment override. Budget for possible paid one-time Jev re-evaluation of unmarked recent predictions during the silent first-rollout sync.
+**Render deployment:** Set or override `HISTORY_SYNC_DAYS=7` for recent history or `0` for live-only alerts. Existing values above 7 must be changed to an integer from 0 to 7 before deploying; a default does not replace an existing environment override. With history enabled, budget for possible paid Jev re-evaluation of unmarked recent predictions during silent sync.
 
 ---
 

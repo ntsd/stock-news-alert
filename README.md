@@ -118,13 +118,13 @@ The service embeds a dark-mode web application and REST API:
 2. **Centralized MongoDB Shared Cache & Startup Warm-Up:**
     - On boot, loads recent Jev-evaluated article IDs into the in-memory LRU cache for restart deduplication. Unmarked legacy predictions are not treated as verified cache hits and are re-evaluated during silent historical sync.
    - Predictions and synthesized ElevenLabs MP3 binaries are persisted in MongoDB Atlas, sharing model decisions and audio buffers across instances.
-   - Falls back gracefully to an in-memory store if `MONGODB_URI` is omitted.
+    - Uses an in-memory store only if `MONGODB_URI` is omitted. If a URI is configured, connection or initialization failure aborts startup before polling or serving the dashboard.
 3. **ElevenLabs Voice Alerts via Telegram `sendVoice`:**
     - High-confidence breaking alerts (`BREAKING_CRITICAL` only) generate audio broadcasts via ElevenLabs' low-latency `eleven_turbo_v2_5` model, sent as voice memos with HTML captions. Notable catalysts continue to receive text alerts.
 4. **Sentry Agent Tracing:**
    - Instruments OpenTelemetry trace spans across Jev decisions, Finnhub polling, and ElevenLabs audio generation to monitor decision latency and token efficiency.
 5. **Dynamic Incremental Sync & Historical Backfill (`HISTORY_SYNC_DAYS`):**
-    - **Bounded News Window:** `HISTORY_SYNC_DAYS` accepts integers from 1 to 7, default 7. Initial sync fetches the configured recent window per ticker. The scheduler caps news lookback at seven days even after longer downtime; it does not backfill older downtime gaps.
+    - **Bounded News Window:** `HISTORY_SYNC_DAYS` accepts integers from 0 to 7, default 7. Set `0` for live alert mode: query today (UTC) only, skip historical seeding, downtime catch-up, and cold-start Mongo reevaluation. Today's uncached articles still receive Jev evaluation and normal alert filtering, including on the first poll. Values 1–7 fetch the configured recent window per ticker, capped at seven days even after longer downtime.
     - **Shared Jev Evaluation:** Every fetched uncached article is genuinely evaluated by Jev through the same live/historical processing path. No fake baseline prediction or fake error fallback is stored. Stored predictions carry `evaluatedBy: 'jev'`.
     - **Silent Sync & Retries:** Historical sync populates the dashboard without Telegram alerts or automatic voice dispatches. MongoDB `sync_metadata` tracks inclusive UTC dates `syncedFrom` and `syncedTo`, with `evaluatedAll: true` marking fully evaluated coverage. Fetch or evaluation failures are retried, and the sync checkpoint is not advanced on failure.
     - **Cold Start / Legacy Records:** On each symbol's first poll after startup, query MongoDB for predictions not marked `evaluatedBy: 'jev'` within the configured recent window (maximum seven days), even if Finnhub no longer returns them. Evaluate silently without Telegram or voice alerts; successful writes are reused across restarts, and failures retry on the next symbol turn. Older archive records remain untouched. Unmarked previously genuine results are also re-evaluated because their provenance is unknown; this makes real Jev API calls and may incur paid usage beyond the free allowance.
@@ -143,7 +143,7 @@ The service embeds a dark-mode web application and REST API:
     - Dashboard requests also retain provider-supplied **15-minute** (`24H`) and **hourly** (`7D`) candles. Intraday retention starts with fetched data; unavailable older intraday history cannot be reconstructed from daily bars.
     - MongoDB `price_candles` holds one OHLCV document per `symbol + interval + timestamp`, with a unique compound index, `provider`, `fetchedAt`, and `adjustedClose` when supplied. Upserts correct overlapping bars without deleting older history. Prices retain provider precision. There is no Mongo expiry/TTL on archived candles.
     - `price_history_metadata` records the last successful fetch and its returned bounds. Shared in-memory caching holds at most 100 windows, expires chart windows after five minutes, and coalesces concurrent requests. Refresh failures retry after one minute and serve labeled stale candles when available; synthetic quote-based history is never generated or stored.
-    - With MongoDB unavailable/unconfigured, fallback memory retains at most 100 series with 20,000 bars each and is **not durable**. Configure `MONGODB_URI` to build the archive across restarts.
+    - With MongoDB unconfigured, memory retains at most 100 series with 20,000 bars each and is **not durable**. A configured MongoDB initialization failure aborts startup. Configure `MONGODB_URI` to build the archive across restarts.
     - These are the provider's **latest revised candles**, not point-in-time versions. Future backtests must account for corporate actions, survivorship/look-ahead bias, provider coverage and licensing; a timestamped fetch does not prove what data was available historically. A backtest engine is not included.
 
 ---
@@ -158,7 +158,7 @@ Deploy your own instance directly to Render with one click:
 
 Render reads [`render.yaml`](render.yaml) automatically to configure the web service with automated health checks on `/health`.
 
-Set or override `HISTORY_SYNC_DAYS=7` in the Render service's environment settings. Existing environment values above 7 must be changed to an integer from 1 to 7 before deploying; the default does not replace an existing override. Allow for possible paid one-time Jev re-evaluation of unmarked recent predictions on the first rollout; this sync is silent and retains older MongoDB news and prices.
+Set or override `HISTORY_SYNC_DAYS=7` in the Render service's environment settings, or `0` for live-only alerts without history sync. Existing environment values above 7 must be changed to an integer from 0 to 7 before deploying; the default does not replace an existing override. With history enabled, allow for possible paid Jev re-evaluation of unmarked recent predictions; this sync is silent and retains older MongoDB news and prices.
 
 ---
 
@@ -180,7 +180,7 @@ Set or override `HISTORY_SYNC_DAYS=7` in the Render service's environment settin
 | `WATCHLIST` | No | AAPL,MSFT,NVDA,GOOGL,AMZN,META,TSLA,AMD,TSM,BABA,TCEHY,XIACY | Comma-separated list of ticker symbols |
 | `POLL_INTERVAL_MS` | No | `2000` | Paced interval between ticker polls (30 req/min) |
 | `MIN_CONFIDENCE` | No | `0.50` | Minimum confidence cutoff (0.0 to 1.0) |
-| `HISTORY_SYNC_DAYS` | No | `7` | Recent news sync lookback in days (integer 1–7); scheduler never fetches beyond seven days, even after downtime. Does not limit price history or archive retention. |
+| `HISTORY_SYNC_DAYS` | No | `7` | Integer 0–7: `0` disables history sync and Mongo reevaluation, polling today's news in live alert mode; 1–7 enables bounded recent news sync. Does not limit dashboard access, price history, or archive retention. |
 | `PORT` | No | `3000` | HTTP port for web dashboard & health check |
 
 ---

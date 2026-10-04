@@ -156,13 +156,15 @@ export class PredictionStorageService {
 
       console.log('✅ [MongoDB] Connected to centralized MongoDB cluster.');
     } catch (err) {
-      console.warn('⚠️ [MongoDB] Connection failed. Falling back to internal memory prediction store:', err instanceof Error ? err.message : err);
+      await this.client?.close();
       this.client = null;
+      this.db = null;
       this.collection = null;
       this.syncCollection = null;
       this.quoteCollection = null;
       this.priceCollection = null;
       this.priceMetadataCollection = null;
+      throw new Error('MongoDB initialization failed; refusing to start with in-memory storage when MONGODB_URI is configured.', { cause: err });
     }
   }
 

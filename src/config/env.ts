@@ -69,9 +69,10 @@ export const envSchema = z.object({
     .string()
     .optional()
     .default('7')
+    .refine(val => val.trim().length > 0, { message: 'HISTORY_SYNC_DAYS cannot be empty' })
     .transform(Number)
-    .refine((val) => Number.isInteger(val) && val >= 1 && val <= 7, {
-      message: 'HISTORY_SYNC_DAYS must be an integer between 1 and 7 days',
+    .refine((val) => Number.isInteger(val) && val >= 0 && val <= 7, {
+      message: 'HISTORY_SYNC_DAYS must be an integer between 0 and 7 days (0 disables historical sync)',
     }),
 
   ENABLE_HEALTH_SERVER: z

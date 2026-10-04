@@ -88,6 +88,32 @@ describe('NewsAlertPoller scheduling', () => {
 });
 
 describe('NewsAlertPoller sync coverage', () => {
+  it('uses zero-day live alerts without Mongo backfill or downtime history', async (t) => {
+    t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-10-05T12:00:00Z') });
+    const s = setup(t, undefined, 0);
+    await s.storage.savePrediction(article(320, '2026-10-05T01:00:00Z'), result);
+    delete (await s.storage.getCachedPrediction(320))!.evaluatedBy;
+    const pending = t.mock.method(s.storage, 'getRecentNews');
+    s.fetchNews.mock.mockImplementation(async () => [
+      article(321, '2026-10-05T11:00:00Z'), article(322, '2026-10-04T23:00:00Z'),
+      article(323, '2026-10-06'),
+    ]);
+    await s.tick();
+    assert.equal(pending.mock.callCount(), 0);
+    assert.equal(s.classify.mock.callCount(), 1);
+    assert.equal(s.sendAlert.mock.callCount(), 1);
+    assert.equal((await s.storage.getCachedPrediction(320))?.evaluatedBy, undefined);
+    assert.equal(await s.storage.getCachedPrediction(322), null);
+    assert.equal(await s.storage.getCachedPrediction(323), null);
+    await s.storage.setSyncRange('AAPL', '2026-09-01', '2026-09-02');
+    await s.tick();
+    assert.equal(s.classify.mock.callCount(), 1);
+    assert.equal(s.sendAlert.mock.callCount(), 1);
+    for (const call of s.fetchNews.mock.calls) {
+      assert.deepEqual(call.arguments, ['AAPL', '2026-10-05', '2026-10-05']);
+    }
+  });
+
   it('evaluates unverified Mongo news once on cold start without Finnhub or alerts', async (t) => {
     t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-10-05T12:00:00Z') });
     const s = setup(t);

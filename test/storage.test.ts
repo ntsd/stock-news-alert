@@ -5,6 +5,12 @@ import type { FinnhubNewsArticle } from '../src/types/finnhub.js';
 import type { JevSentimentResult } from '../src/types/jev.js';
 
 describe('PredictionStorageService (Centralized Prediction Cache)', () => {
+  it('fails startup instead of falling back when a configured Mongo URI cannot initialize', async () => {
+    const storage = new PredictionStorageService('invalid-mongodb-uri');
+    await assert.rejects(storage.init(), /MongoDB initialization failed; refusing to start/);
+    await storage.close();
+  });
+
   it('scopes startup Mongo queries and memory loading to the configured watchlist', async () => {
     const storage = new PredictionStorageService();
     await storage.saveAudio(1, Buffer.from('test'));

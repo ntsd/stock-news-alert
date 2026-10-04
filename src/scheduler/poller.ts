@@ -82,7 +82,7 @@ export class NewsAlertPoller {
     this.storage = options.storage;
     this.elevenlabsService = options.elevenlabsService;
     this.deduplicator = options.deduplicator;
-    this.historySyncDays = Math.min(7, Math.max(1, options.historySyncDays ?? 7));
+    this.historySyncDays = Math.min(7, Math.max(0, options.historySyncDays ?? 7));
     this.priceHistoryService = options.priceHistoryService;
 
     if (options.initialSeededSymbols) {
@@ -158,7 +158,7 @@ export class NewsAlertPoller {
         const oneDay = 24 * 60 * 60 * 1000;
         const historyFrom = new Date(now.getTime() - this.historySyncDays * oneDay)
           .toISOString().split('T')[0]!;
-        if (!this.coldStartEvaluatedSymbols.has(symbol)) {
+        if (this.historySyncDays > 0 && !this.coldStartEvaluatedSymbols.has(symbol)) {
           const pending = await this.storage.getRecentNews({
             symbol, fromDate: historyFrom, toDate: now.toISOString(),
             unevaluatedOnly: true, limit: 0, sortBy: 'date',
@@ -176,9 +176,12 @@ export class NewsAlertPoller {
         // Legacy metadata cannot prove historical coverage: re-seed once using cached predictions.
         const syncedFrom = metadata?.syncedFrom;
         const syncedTo = metadata?.syncedTo;
-        const isHistoricalSync = !syncedFrom || !syncedTo || historyFrom < syncedFrom || !metadata?.evaluatedAll;
+        const isHistoricalSync = this.historySyncDays > 0
+          && (!syncedFrom || !syncedTo || historyFrom < syncedFrom || !metadata?.evaluatedAll);
 
-        if (isHistoricalSync) {
+        if (this.historySyncDays === 0) {
+          fromDate = toDate; // Live-only: no downtime catch-up or historical seeding.
+        } else if (isHistoricalSync) {
           fromDate = historyFrom;
           // Finnhub dates are inclusive; overlap the boundary to avoid losing that day's news.
           if (syncedFrom && syncedTo && metadata?.evaluatedAll && historyFrom < syncedFrom) toDate = syncedFrom;
@@ -202,7 +205,11 @@ export class NewsAlertPoller {
 
         // 2. Fetch and process company news
         const articles = await this.finnhubClient.fetchCompanyNews(symbol, fromDate, toDate);
-        await this.processArticlesForSymbol(symbol, articles, isHistoricalSync);
+        const currentArticles = this.historySyncDays === 0
+          ? articles.filter(article => article.datetime * 1000 >= Date.parse(fromDate)
+            && article.datetime * 1000 <= now.getTime())
+          : articles;
+        await this.processArticlesForSymbol(symbol, currentArticles, isHistoricalSync);
 
         // Only successful fetches and storage writes extend confirmed coverage.
         await this.storage.setSyncRange(symbol, fromDate, toDate, articles.length, now, true);
