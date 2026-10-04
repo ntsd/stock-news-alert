@@ -60,7 +60,7 @@ export class FinnhubClient {
             console.warn(
               `⚠️ [Finnhub] "${symbol}" returned 403 Forbidden. Finnhub Free Tier does not include native international exchanges (like .HK). For Hong Kong equities, use the corresponding US ADR ticker (e.g., BABA for 9988.HK, TCEHY for 0700.HK, BYDDY for 1211.HK, BIDU for 9888.HK).`
             );
-            return [];
+            throw new Error(`Finnhub 403 Forbidden: ${errorBody}`);
           }
           throw new Error(`Finnhub API error (${response.status}): ${errorBody}`);
         }
@@ -68,8 +68,7 @@ export class FinnhubClient {
         const data = (await response.json()) as unknown;
 
         if (!Array.isArray(data)) {
-          console.warn(`[Finnhub] Unexpected non-array response for ${symbol}:`, data);
-          return [];
+          throw new TypeError(`Finnhub returned a non-array news response for ${symbol}`);
         }
 
         return data as FinnhubNewsArticle[];

@@ -123,7 +123,9 @@ The service embeds a dark-mode web application and REST API:
    - Instruments OpenTelemetry trace spans across Jev decisions, Finnhub polling, and ElevenLabs audio generation to monitor decision latency and token efficiency.
 5. **Dynamic Incremental Sync & Historical Backfill (`HISTORY_SYNC_DAYS`):**
    - **First Run:** Queries Finnhub for the past 7 days (configurable via `HISTORY_SYNC_DAYS`, default 7) of news across each ticker, seeds Jev predictions, and populates the dashboard silently.
-   - **Subsequent Runs:** Tracks `lastSyncDate` per symbol in MongoDB. If the bot was offline for 10 days, on startup it automatically queries from 10 days ago to today, healing all data gaps without duplicate alerts.
+    - **Subsequent Runs:** Tracks inclusive UTC dates `syncedFrom` and `syncedTo` per symbol in MongoDB's `sync_metadata`. Downtime gaps are fetched from `syncedTo` (with a one-day overlap) through today.
+    - **Expanded History:** Changing `HISTORY_SYNC_DAYS` from 3 to 365 backfills from one year ago through the existing `syncedFrom` (three days ago), silently reusing cached predictions. Live polling resumes on the next tick. Reducing the setting never shrinks recorded coverage.
+    - **Legacy Metadata:** Timestamp-only records are re-seeded once for the configured window because `lastSyncedAt` alone cannot prove historical coverage. Coverage advances only after successful fetches and processing, including valid empty news ranges.
    - **Continuous Live Polling:** Rolls continuously over the active window, alerting breaking news in sub-second latency.
 6. **Unified News Priority & Urgency Scoring:**
    - TypeSafe Jev evaluates a unified multi-choice `news_priority` decision alongside directional sentiment in a single sub-second evaluation:
@@ -177,11 +179,11 @@ Render reads [`render.yaml`](render.yaml) automatically to configure the web ser
 npm test
 ```
 
-24 unit tests across 6 test suites verify:
+Unit tests verify:
 - Bounded LRU Cache capacity and TTL expiration
 - Telegram HTML entity escaping (`&`, `<`, `>`) and priority banner rendering
 - Centralized MongoDB prediction caching and top stocks ranking
-- Incremental sync timestamp tracking (`getLastSyncDate` / `setLastSyncDate`)
+- Confirmed sync range tracking (`getSyncMetadata` / `setSyncRange`), expanded lookbacks, and failed-sync retries
 - ElevenLabs synthesized audio buffer caching and retrieval
 - Environment validation, optional Telegram fallback, and `HISTORY_SYNC_DAYS` boundary constraints
 - Multi-symbol interest filtering, date range lookbacks, and impact-based ordering

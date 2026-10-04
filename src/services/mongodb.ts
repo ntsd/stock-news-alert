@@ -45,6 +45,9 @@ export interface SyncMetadata {
   _id: string; // Ticker symbol, e.g. "AAPL"
   lastSyncedAt: string;
   articlesCount: number;
+  // UTC dates (YYYY-MM-DD); absent on legacy timestamp-only records.
+  syncedFrom?: string;
+  syncedTo?: string;
 }
 
 export interface StockAggregate {
@@ -76,7 +79,7 @@ export class PredictionStorageService {
   private syncCollection: Collection<SyncMetadata> | null = null;
   private quoteCollection: Collection<StockQuote & { _id: string }> | null = null;
   private readonly memoryStore = new Map<number, StoredArticle>();
-  private readonly syncMemoryStore = new Map<string, Date>();
+  private readonly syncMemoryStore = new Map<string, SyncMetadata>();
   private readonly quotesMemoryStore = new Map<string, StockQuote>();
 
   constructor(
@@ -151,61 +154,33 @@ export class PredictionStorageService {
   }
 
   /**
-   * Retrieves the last sync timestamp for a symbol to determine the exact start date for the next fetch.
-   * Checks both sync_metadata collection and recent articles in predictions collection.
+   * Retrieves confirmed query coverage, not inferred dates from individual articles.
    */
-  public async getLastSyncDate(symbol: string): Promise<Date | null> {
+  public async getSyncMetadata(symbol: string): Promise<SyncMetadata | null> {
     const sym = symbol.toUpperCase();
-    return traceSpan('mongo.get_last_sync_date', 'db.read', { symbol: sym }, async () => {
-      // 1. Check sync_metadata collection
+    return traceSpan('mongo.get_sync_metadata', 'db.read', { symbol: sym }, async () => {
       if (this.syncCollection) {
-        const meta = await this.syncCollection.findOne({ _id: sym });
-        if (meta?.lastSyncedAt) {
-          return new Date(meta.lastSyncedAt);
-        }
+        return await this.syncCollection.findOne({ _id: sym });
       }
-
-      // 2. Check memory store for sync timestamp
-      if (this.syncMemoryStore.has(sym)) {
-        return this.syncMemoryStore.get(sym)!;
-      }
-
-      // 3. Fallback: check newest article date in collection
-      if (this.collection) {
-        const latestArticle = await this.collection
-          .find({ symbol: sym })
-          .sort({ publishedAt: -1 })
-          .limit(1)
-          .project({ publishedAt: 1 })
-          .next();
-        if (latestArticle?.publishedAt) {
-          return new Date(latestArticle.publishedAt);
-        }
-      }
-
-      for (const art of this.memoryStore.values()) {
-        if (art.symbol.toUpperCase() === sym) {
-          return new Date(art.publishedAt);
-        }
-      }
-
-      return null;
+      const meta = this.syncMemoryStore.get(sym);
+      return meta ? { ...meta } : null;
     });
   }
 
   /**
-   * Updates the last sync timestamp for a symbol in MongoDB Atlas.
+   * Extends an overlapping, successfully processed query range without shrinking coverage.
    */
-  public async setLastSyncDate(
+  public async setSyncRange(
     symbol: string,
-    date: Date = new Date(),
-    articlesCount = 0
+    syncedFrom: string,
+    syncedTo: string,
+    articlesCount = 0,
+    date: Date = new Date()
   ): Promise<void> {
     const sym = symbol.toUpperCase();
-    this.syncMemoryStore.set(sym, date);
 
     if (this.syncCollection) {
-      await traceSpan('mongo.set_last_sync_date', 'db.write', { symbol: sym }, async () => {
+      await traceSpan('mongo.set_sync_range', 'db.write', { symbol: sym }, async () => {
         await this.syncCollection!.updateOne(
           { _id: sym },
           {
@@ -214,11 +189,22 @@ export class PredictionStorageService {
               lastSyncedAt: date.toISOString(),
               articlesCount,
             },
+            $min: { syncedFrom },
+            $max: { syncedTo },
           },
           { upsert: true }
         );
       });
     }
+
+    const previous = this.syncMemoryStore.get(sym);
+    this.syncMemoryStore.set(sym, {
+      _id: sym,
+      lastSyncedAt: date.toISOString(),
+      articlesCount,
+      syncedFrom: previous?.syncedFrom && previous.syncedFrom < syncedFrom ? previous.syncedFrom : syncedFrom,
+      syncedTo: previous?.syncedTo && previous.syncedTo > syncedTo ? previous.syncedTo : syncedTo,
+    });
   }
 
   /**
@@ -281,7 +267,7 @@ export class PredictionStorageService {
 
   /**
    * Returns a list of symbols that already have historical articles or sync metadata stored in MongoDB,
-   * preventing redundant 3-month backfill fetches on server restarts.
+  * for startup reporting; query coverage is checked independently by the poller.
    */
   public async getSeededSymbols(): Promise<string[]> {
     return traceSpan('mongo.get_seeded_symbols', 'db.read', {}, async () => {
@@ -339,9 +325,6 @@ export class PredictionStorageService {
       urgencyScore: classification.urgencyScore,
     };
 
-    // Always update local memory store
-    this.memoryStore.set(article.id, doc);
-
     if (this.collection) {
       await traceSpan('mongo.save_prediction', 'db.write', { id: article.id, symbol: article.related }, async () => {
         await this.collection!.updateOne(
@@ -351,6 +334,8 @@ export class PredictionStorageService {
         );
       });
     }
+    // Failed Mongo writes must remain retryable, not appear as cached successes.
+    this.memoryStore.set(article.id, doc);
   }
 
   /**

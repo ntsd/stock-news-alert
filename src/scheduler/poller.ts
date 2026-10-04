@@ -152,29 +152,27 @@ export class NewsAlertPoller {
 
     await traceSpan('poller.tick', 'scheduler.poll', { symbol }, async () => {
       try {
-        const lastSyncDate = await this.storage.getLastSyncDate(symbol);
-        const isFirstRun = lastSyncDate === null && !this.seededSymbols.has(symbol);
-
+        const metadata = await this.storage.getSyncMetadata(symbol);
         const now = new Date();
-        const toDate = now.toISOString().split('T')[0]!;
+        const oneDay = 24 * 60 * 60 * 1000;
+        const historyFrom = new Date(now.getTime() - this.historySyncDays * oneDay)
+          .toISOString().split('T')[0]!;
+        let toDate = now.toISOString().split('T')[0]!;
         let fromDate: string;
+        // Legacy metadata cannot prove historical coverage: re-seed once using cached predictions.
+        const syncedFrom = metadata?.syncedFrom;
+        const syncedTo = metadata?.syncedTo;
+        const isHistoricalSync = !syncedFrom || !syncedTo || historyFrom < syncedFrom;
 
-        if (isFirstRun) {
-          // 1st run: fetch historySyncDays ago (default 365 days / 1 year) to today
-          const historyDaysAgo = new Date(now.getTime() - this.historySyncDays * 24 * 60 * 60 * 1000);
-          fromDate = historyDaysAgo.toISOString().split('T')[0]!;
-          console.log(`📅 [Poller] First sync for ${symbol}: querying ${this.historySyncDays}-day history (${fromDate} to ${toDate})...`);
+        if (isHistoricalSync) {
+          fromDate = historyFrom;
+          // Finnhub dates are inclusive; overlap the boundary to avoid losing that day's news.
+          if (syncedFrom && syncedTo) toDate = syncedFrom;
+          console.log(`📅 [Poller] Historical sync for ${symbol}: querying ${fromDate} to ${toDate}...`);
         } else {
-          // Subsequent run: fetch after the last sync date (with 24h buffer for timezone/reporting overlap) to today
-          // e.g. If last sync was 10 days ago, fetches from 11 days ago to today.
-          // e.g. If last sync was 1 minute ago, fetches from yesterday to today.
-          const oneDayBuffer = 24 * 60 * 60 * 1000;
-          const syncBaseDate = lastSyncDate ?? new Date(now.getTime() - oneDayBuffer);
-          const syncFrom = new Date(Math.max(
-            now.getTime() - this.historySyncDays * 24 * 60 * 60 * 1000, // safety cap at historySyncDays max
-            syncBaseDate.getTime() - oneDayBuffer
-          ));
-          fromDate = syncFrom.toISOString().split('T')[0]!;
+          // Catch up through today with a one-day reporting overlap. Do not skip downtime gaps.
+          fromDate = new Date(new Date(syncedTo!).getTime() - oneDay)
+            .toISOString().split('T')[0]!;
         }
 
         // 1. Fetch real-time market quote
@@ -189,10 +187,10 @@ export class NewsAlertPoller {
 
         // 2. Fetch and process company news
         const articles = await this.finnhubClient.fetchCompanyNews(symbol, fromDate, toDate);
-        await this.processArticlesForSymbol(symbol, articles, isFirstRun);
+        await this.processArticlesForSymbol(symbol, articles, isHistoricalSync);
 
-        // Persist successful sync timestamp in MongoDB Atlas
-        await this.storage.setLastSyncDate(symbol, now, articles.length);
+        // Only successful fetches and storage writes extend confirmed coverage.
+        await this.storage.setSyncRange(symbol, fromDate, toDate, articles.length, now);
         this.seededSymbols.add(symbol);
       } catch (error) {
         console.error(`❌ [Poller] Error polling news for ${symbol}:`, error instanceof Error ? error.message : error);
@@ -203,9 +201,9 @@ export class NewsAlertPoller {
   private async processArticlesForSymbol(
     symbol: string,
     articles: FinnhubNewsArticle[],
-    isFirstRun: boolean
+    isHistoricalSync: boolean
   ): Promise<void> {
-    if (isFirstRun) {
+    if (isHistoricalSync) {
       // Sort articles newest first
       const sorted = [...articles].sort((a, b) => b.datetime - a.datetime);
 
@@ -270,13 +268,13 @@ export class NewsAlertPoller {
 
     // Subsequent runs (including gap catch-up): process from oldest to newest
     const sortedArticles = [...articles].sort((a, b) => a.datetime - b.datetime);
+    let processingFailed = false;
 
     for (const article of sortedArticles) {
       if (this.deduplicator.has(article.id)) {
         continue;
       }
 
-      this.deduplicator.add(article.id);
       this.articlesSeen++;
 
       // Check article age: if it occurred during a long server downtime (> 24 hours ago),
@@ -318,6 +316,8 @@ export class NewsAlertPoller {
           await this.storage.savePrediction(article, classification);
           console.log(`🧠 [Jev] Decision for #${article.id}: ${classification.label} (${classification.sentiment}) | Priority: ${classification.priority} (${(classification.urgencyScore * 100).toFixed(0)}% urgency) | Conf: ${(classification.confidence * 100).toFixed(1)}%`);
         }
+
+        this.deduplicator.add(article.id);
 
         // If the article occurred during a previous downtime gap (> 24h ago), backfill quietly into DB
         if (!isFresh) {
@@ -390,11 +390,13 @@ export class NewsAlertPoller {
           console.log(`📱 [Poller] Signal recorded for ${symbol} (#${article.id}) (Telegram push notifications disabled).`);
         }
       } catch (err) {
+        processingFailed = true;
         console.error(
           `❌ [Poller] Error evaluating/alerting article #${article.id} for ${symbol}:`,
           err instanceof Error ? err.message : err
         );
       }
     }
+    if (processingFailed) throw new Error(`Incomplete news sync for ${symbol}; coverage was not advanced.`);
   }
 }

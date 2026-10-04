@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { PredictionStorageService } from '../src/services/mongodb.js';
+import { PredictionStorageService, type SyncMetadata } from '../src/services/mongodb.js';
 import type { FinnhubNewsArticle } from '../src/types/finnhub.js';
 import type { JevSentimentResult } from '../src/types/jev.js';
 
@@ -51,6 +51,25 @@ describe('PredictionStorageService (Centralized Prediction Cache)', () => {
     assert.equal(cached.priority, 'BREAKING_CRITICAL');
     assert.equal(cached.isBreaking, true);
     assert.equal(cached.urgencyScore, 0.955);
+  });
+
+  it('should not cache a prediction when its Mongo write fails', async () => {
+    const storage = new PredictionStorageService();
+    Object.assign(storage, {
+      collection: { async updateOne() { throw new Error('Mongo unavailable'); } },
+    });
+    await assert.rejects(storage.savePrediction({
+      id: 99, related: 'AAPL', datetime: 1791201600, category: 'company',
+      headline: 'Test', summary: '', source: 'Test', image: '', url: '',
+    }, {
+      sentiment: 1, label: 'BULLISH', confidence: 0.9, rawChoice: 'bullish',
+      probabilities: { bullish: 0.9, bearish: 0.1 },
+      priority: 'BREAKING_CRITICAL', priorityConfidence: 0.9,
+      priorityProbabilities: { breaking_critical: 0.9, notable_catalyst: 0.1, routine_noise: 0 },
+      isBreaking: true, urgencyScore: 0.95,
+    }), /Mongo unavailable/);
+    Object.assign(storage, { collection: null });
+    assert.equal(await storage.getCachedPrediction(99), null);
   });
 
   it('should correctly rank top stocks by bullish ratio and volume', async () => {
@@ -158,25 +177,59 @@ describe('PredictionStorageService (Centralized Prediction Cache)', () => {
     assert.ok(ids.includes(102));
   });
 
-  it('should track and retrieve last sync date for incremental fetching', async () => {
+  it('should extend sync coverage without shrinking either boundary', async () => {
     const storage = new PredictionStorageService();
     await storage.init();
 
-    // Initially null for unseeded symbol
-    const initial = await storage.getLastSyncDate('GOOGL');
-    assert.equal(initial, null);
+    assert.equal(await storage.getSyncMetadata('GOOGL'), null);
+    await storage.setSyncRange('googl', '2026-10-02', '2026-10-05', 42);
+    await storage.setSyncRange('GOOGL', '2025-10-05', '2026-10-02', 100);
+    await storage.setSyncRange('GOOGL', '2026-10-04', '2026-10-06', 0);
+    const metadata = await storage.getSyncMetadata('googl');
+    assert.equal(metadata?.syncedFrom, '2025-10-05');
+    assert.equal(metadata?.syncedTo, '2026-10-06');
+    assert.equal(metadata?.articlesCount, 0);
+    assert.ok((await storage.getSeededSymbols()).includes('GOOGL'));
+  });
 
-    // Set sync timestamp (e.g. 10 days ago)
-    const tenDaysAgo = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000);
-    await storage.setLastSyncDate('GOOGL', tenDaysAgo, 42);
+  it('should persist atomic Mongo range updates and read them on restart', async () => {
+    const storage = new PredictionStorageService();
+    const date = new Date('2026-10-05T12:00:00Z');
+    const document: SyncMetadata = {
+      _id: 'GOOGL', lastSyncedAt: date.toISOString(), articlesCount: 42,
+      syncedFrom: '2025-10-05', syncedTo: '2026-10-05',
+    };
+    const collection = {
+      async findOne(filter: unknown) {
+        assert.deepEqual(filter, { _id: 'GOOGL' });
+        return document;
+      },
+      async updateOne(filter: unknown, update: unknown, options: unknown) {
+        assert.deepEqual(filter, { _id: 'GOOGL' });
+        assert.deepEqual(update, {
+          $set: { _id: 'GOOGL', lastSyncedAt: date.toISOString(), articlesCount: 42 },
+          $min: { syncedFrom: '2025-10-05' },
+          $max: { syncedTo: '2026-10-02' },
+        });
+        assert.deepEqual(options, { upsert: true });
+      },
+    };
+    Object.assign(storage, { syncCollection: collection });
+    await storage.setSyncRange('googl', '2025-10-05', '2026-10-02', 42, date);
 
-    const retrieved = await storage.getLastSyncDate('GOOGL');
-    assert.ok(retrieved);
-    assert.equal(retrieved.toISOString(), tenDaysAgo.toISOString());
+    const restarted = new PredictionStorageService();
+    Object.assign(restarted, { syncCollection: collection });
+    assert.deepEqual(await restarted.getSyncMetadata('googl'), document);
+  });
 
-    // Verify seeded symbols list includes GOOGL
-    const seeded = await storage.getSeededSymbols();
-    assert.ok(seeded.includes('GOOGL'));
+  it('should not retain a checkpoint in memory when Mongo persistence fails', async () => {
+    const storage = new PredictionStorageService();
+    Object.assign(storage, {
+      syncCollection: { async updateOne() { throw new Error('Mongo unavailable'); } },
+    });
+    await assert.rejects(storage.setSyncRange('AAPL', '2025-10-05', '2026-10-05'), /Mongo unavailable/);
+    Object.assign(storage, { syncCollection: null });
+    assert.equal(await storage.getSyncMetadata('AAPL'), null);
   });
 
   it('should filter news by multiple interest symbols, date range, and order by impact', async () => {
