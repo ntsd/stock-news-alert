@@ -1,6 +1,7 @@
 import type { FinnhubNewsArticle } from '../types/finnhub.js';
 import type { FinnhubClient } from '../services/finnhub.js';
 import type { JevClassificationService } from '../services/jev.js';
+import type { JevSentimentResult } from '../types/jev.js';
 import type { TelegramAlertService } from '../services/telegram.js';
 import type { BoundedTtlLruCache } from '../cache/lru.js';
 import type { PredictionStorageService } from '../services/mongodb.js';
@@ -168,6 +169,11 @@ export class NewsAlertPoller {
             confidence: 0.85,
             probabilities: { bullish: 0.85, bearish: 0.15 },
             rawChoice: 'bullish',
+            priority: 'ROUTINE_NOISE',
+            priorityConfidence: 0.8,
+            priorityProbabilities: { breaking_critical: 0.05, notable_catalyst: 0.15, routine_noise: 0.8 },
+            isBreaking: false,
+            urgencyScore: 0.125,
           });
         }
       }
@@ -195,13 +201,7 @@ export class NewsAlertPoller {
 
       try {
         // 1. Check Centralized MongoDB Shared Prediction Cache
-        let classification: {
-          sentiment: 1 | 0;
-          label: 'BULLISH' | 'BEARISH';
-          confidence: number;
-          probabilities: { bullish: number; bearish: number };
-          rawChoice: 'bullish' | 'bearish';
-        };
+        let classification: JevSentimentResult;
 
         const cached = await this.storage.getCachedPrediction(article.id);
         if (cached) {
@@ -212,19 +212,36 @@ export class NewsAlertPoller {
             confidence: cached.confidence,
             probabilities: cached.probabilities,
             rawChoice: cached.rawChoice,
+            priority: cached.priority || 'ROUTINE_NOISE',
+            priorityConfidence: cached.priorityConfidence || 0.8,
+            priorityProbabilities: {
+              breaking_critical: cached.priority === 'BREAKING_CRITICAL' ? 0.9 : 0.05,
+              notable_catalyst: cached.priority === 'NOTABLE_CATALYST' ? 0.8 : 0.15,
+              routine_noise: cached.priority === 'ROUTINE_NOISE' ? 0.8 : 0.1,
+            },
+            isBreaking: cached.isBreaking ?? false,
+            urgencyScore: cached.urgencyScore ?? 0.1,
           };
-          console.log(`♻️ [Mongo Cache] Reusing shared prediction for #${article.id}: ${classification.label} (Conf: ${(classification.confidence * 100).toFixed(1)}%)`);
+          console.log(`♻️ [Mongo Cache] Reusing shared prediction for #${article.id}: ${classification.label} (${classification.priority}) | Conf: ${(classification.confidence * 100).toFixed(1)}%`);
         } else {
           // 2. Classify via Jev System 1 Model
           classification = await this.jevService.classifyArticleSentiment(article);
           await this.storage.savePrediction(article, classification);
-          console.log(`🧠 [Jev] Decision for #${article.id}: ${classification.label} (${classification.sentiment}) | Conf: ${(classification.confidence * 100).toFixed(1)}%`);
+          console.log(`🧠 [Jev] Decision for #${article.id}: ${classification.label} (${classification.sentiment}) | Priority: ${classification.priority} (${(classification.urgencyScore * 100).toFixed(0)}% urgency) | Conf: ${(classification.confidence * 100).toFixed(1)}%`);
         }
 
-        // 3. Confidence Cutoff Check
+        // 3. Confidence & Noise Filtering Check
         if (classification.confidence < this.minConfidence) {
           console.log(
             `⚠️ [Poller] Skipping alert for #${article.id}: Confidence ${(classification.confidence * 100).toFixed(1)}% < ${this.minConfidence * 100}% threshold`
+          );
+          continue;
+        }
+
+        // Filter out routine noise from push notifications to prevent fatigue (still stored in Mongo & Dashboard)
+        if (classification.priority === 'ROUTINE_NOISE' && classification.urgencyScore < 0.35) {
+          console.log(
+            `ℹ️ [Poller] Saved routine noise #${article.id} for ${symbol} to DB (skipping Telegram push to prevent alert fatigue).`
           );
           continue;
         }

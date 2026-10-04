@@ -33,6 +33,15 @@ describe('Telegram Format Utilities', () => {
         bearish: 0.05,
       },
       rawChoice: 'bullish',
+      priority: 'BREAKING_CRITICAL',
+      priorityConfidence: 0.98,
+      priorityProbabilities: {
+        breaking_critical: 0.95,
+        notable_catalyst: 0.04,
+        routine_noise: 0.01,
+      },
+      isBreaking: true,
+      urgencyScore: 0.97,
     };
 
     const formatted = formatNewsAlertHtml(article, classification);
@@ -41,7 +50,9 @@ describe('Telegram Format Utilities', () => {
     assert.match(formatted, /Apple &amp; TSMC Announce &lt;Next-Gen&gt; M5 Chip/);
     assert.match(formatted, /Revenue forecast increased by &gt; 20% year-over-year\./);
     assert.match(formatted, /Bloomberg &amp; Reuters/);
+    assert.match(formatted, /🚨 <b>\[BREAKING CRITICAL ALERT\]<\/b>/);
     assert.match(formatted, /🟢 <b>\[AAPL\] BULLISH \(1\)<\/b>/);
     assert.match(formatted, /<b>Confidence:<\/b> <code>■■■■■■■■■■ 95%<\/code>/);
+    assert.match(formatted, /<b>Urgency Score:<\/b> <code>97%<\/code>/);
   });
 });

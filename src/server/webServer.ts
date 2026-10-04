@@ -73,14 +73,17 @@ export function createWebServer(options: WebServerOptions): http.Server {
         return;
       }
 
-      // 4. News feed endpoint (with filter by symbol and sentiment)
+      // 4. News feed endpoint (with filter by symbol, sentiment, priority, and breaking)
       if (url.pathname === '/api/news') {
         const symbol = url.searchParams.get('symbol') || undefined;
         const sentimentParam = url.searchParams.get('sentiment');
         const sentiment = sentimentParam !== null ? (Number.parseInt(sentimentParam, 10) as 1 | 0) : undefined;
+        const priorityParam = url.searchParams.get('priority') as 'BREAKING_CRITICAL' | 'NOTABLE_CATALYST' | 'ROUTINE_NOISE' | null;
+        const priority = priorityParam || undefined;
+        const breakingOnly = url.searchParams.get('breaking') === 'true';
         const limit = Number.parseInt(url.searchParams.get('limit') || '50', 10);
 
-        const news = await storage.getRecentNews(limit, symbol, sentiment);
+        const news = await storage.getRecentNews(limit, symbol, sentiment, priority, breakingOnly);
         res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache' });
         res.end(JSON.stringify({ news }));
         return;
@@ -390,6 +393,33 @@ function renderDashboardHtml(defaultWatchlist: string[]): string {
       border: 1px solid rgba(244, 63, 94, 0.3);
     }
 
+    .pill-breaking {
+      background: rgba(239, 68, 68, 0.2);
+      color: #F87171;
+      border: 1px solid rgba(239, 68, 68, 0.45);
+      box-shadow: 0 0 10px rgba(239, 68, 68, 0.25);
+    }
+
+    .pill-notable {
+      background: rgba(245, 158, 11, 0.2);
+      color: #FBBF24;
+      border: 1px solid rgba(245, 158, 11, 0.4);
+    }
+
+    .pill-routine {
+      background: rgba(148, 163, 184, 0.1);
+      color: #94A3B8;
+      border: 1px solid rgba(148, 163, 184, 0.2);
+    }
+
+    .pill-urgency {
+      background: rgba(99, 102, 241, 0.15);
+      color: #818CF8;
+      border: 1px solid rgba(99, 102, 241, 0.3);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+    }
+
     .stock-stats {
       display: flex;
       justify-content: space-between;
@@ -632,8 +662,10 @@ function renderDashboardHtml(defaultWatchlist: string[]): string {
       <div class="feed-controls">
         <div class="filter-tabs">
           <button class="tab-btn active" onclick="setSentimentFilter('all')">All Signals</button>
-          <button class="tab-btn" onclick="setSentimentFilter('1')">🟢 Bullish Only</button>
-          <button class="tab-btn" onclick="setSentimentFilter('0')">🔴 Bearish Only</button>
+          <button class="tab-btn" onclick="setSentimentFilter('breaking')">🔥 Breaking Only</button>
+          <button class="tab-btn" onclick="setSentimentFilter('catalyst')">⚡ Catalysts</button>
+          <button class="tab-btn" onclick="setSentimentFilter('1')">🟢 Bullish</button>
+          <button class="tab-btn" onclick="setSentimentFilter('0')">🔴 Bearish</button>
         </div>
         <select class="symbol-select" id="symbolSelect" onchange="onSymbolChange(this.value)">
           <option value="">All Tickers</option>
@@ -698,7 +730,13 @@ function renderDashboardHtml(defaultWatchlist: string[]): string {
       try {
         let url = '/api/news?limit=30';
         if (currentSymbol) url += '&symbol=' + encodeURIComponent(currentSymbol);
-        if (currentSentiment !== 'all') url += '&sentiment=' + encodeURIComponent(currentSentiment);
+        if (currentSentiment === 'breaking') {
+          url += '&breaking=true';
+        } else if (currentSentiment === 'catalyst') {
+          url += '&priority=NOTABLE_CATALYST';
+        } else if (currentSentiment !== 'all') {
+          url += '&sentiment=' + encodeURIComponent(currentSentiment);
+        }
 
         const res = await fetch(url);
         const data = await res.json();
@@ -718,11 +756,22 @@ function renderDashboardHtml(defaultWatchlist: string[]): string {
           const bearProb = (n.probabilities.bearish * 100).toFixed(1);
           const timeStr = new Date(n.publishedAt).toLocaleString();
 
+          let priorityPill = '<span class="stock-pill pill-routine">📄 ROUTINE</span>';
+          if (n.priority === 'BREAKING_CRITICAL') {
+            priorityPill = '<span class="stock-pill pill-breaking">🔥 BREAKING</span>';
+          } else if (n.priority === 'NOTABLE_CATALYST') {
+            priorityPill = '<span class="stock-pill pill-notable">⚡ NOTABLE</span>';
+          }
+
+          const urgencyPct = Math.round((n.urgencyScore ?? 0) * 100);
+
           return \`
             <div class="news-card">
               <div class="news-card-header">
                 <div class="news-tags">
                   <span class="tag-sym">\${n.symbol}</span>
+                  \${priorityPill}
+                  <span class="stock-pill pill-urgency">⚡ \${urgencyPct}% Urgency</span>
                   <span class="stock-pill \${badgeClass}">\${badgeText}</span>
                   <span class="tag-conf">Conf: <b>\${conf}%</b> (Bull: \${bullProb}% | Bear: \${bearProb}%)</span>
                 </div>

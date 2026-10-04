@@ -84,6 +84,8 @@ async function runDiagnostics() {
       url: 'https://apple.com',
     });
     console.log(`   ✅ Jev classified sentiment: ${decision.label} (${decision.sentiment}) with ${(decision.confidence * 100).toFixed(1)}% confidence.`);
+    console.log(`   🔥 Jev priority assessment: ${decision.priority} (Urgency: ${(decision.urgencyScore * 100).toFixed(0)}%, isBreaking: ${decision.isBreaking})`);
+    console.log(`   📊 Priority Probabilities: Critical: ${(decision.priorityProbabilities.breaking_critical * 100).toFixed(1)}% | Notable: ${(decision.priorityProbabilities.notable_catalyst * 100).toFixed(1)}% | Noise: ${(decision.priorityProbabilities.routine_noise * 100).toFixed(1)}%`);
   } catch (err: any) {
     console.error('   ❌ Jev error:', err.message);
   }

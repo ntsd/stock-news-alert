@@ -27,6 +27,11 @@ describe('PredictionStorageService (Centralized Prediction Cache)', () => {
       confidence: 0.94,
       probabilities: { bullish: 0.94, bearish: 0.06 },
       rawChoice: 'bullish',
+      priority: 'BREAKING_CRITICAL',
+      priorityConfidence: 0.96,
+      priorityProbabilities: { breaking_critical: 0.92, notable_catalyst: 0.07, routine_noise: 0.01 },
+      isBreaking: true,
+      urgencyScore: 0.955,
     };
 
     // Before saving
@@ -43,6 +48,9 @@ describe('PredictionStorageService (Centralized Prediction Cache)', () => {
     assert.equal(cached.label, 'BULLISH');
     assert.equal(cached.confidence, 0.94);
     assert.equal(cached.symbol, 'TSLA');
+    assert.equal(cached.priority, 'BREAKING_CRITICAL');
+    assert.equal(cached.isBreaking, true);
+    assert.equal(cached.urgencyScore, 0.955);
   });
 
   it('should correctly rank top stocks by bullish ratio and volume', async () => {
@@ -67,6 +75,11 @@ describe('PredictionStorageService (Centralized Prediction Cache)', () => {
         confidence: 0.9,
         probabilities: { bullish: sentiment === 1 ? 0.9 : 0.1, bearish: sentiment === 1 ? 0.1 : 0.9 },
         rawChoice: sentiment === 1 ? 'bullish' : 'bearish',
+        priority: 'NOTABLE_CATALYST',
+        priorityConfidence: 0.88,
+        priorityProbabilities: { breaking_critical: 0.2, notable_catalyst: 0.7, routine_noise: 0.1 },
+        isBreaking: false,
+        urgencyScore: 0.55,
       },
     ];
 

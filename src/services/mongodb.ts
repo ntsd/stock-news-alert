@@ -21,6 +21,12 @@ export interface StoredArticle {
   rawChoice: 'bullish' | 'bearish';
   createdAt: string;
   audioBase64?: string; // Cached ElevenLabs MP3
+
+  // Unified Priority & Urgency
+  priority: 'BREAKING_CRITICAL' | 'NOTABLE_CATALYST' | 'ROUTINE_NOISE';
+  priorityConfidence: number;
+  isBreaking: boolean;
+  urgencyScore: number;
 }
 
 export interface StockAggregate {
@@ -67,6 +73,8 @@ export class PredictionStorageService {
       await this.collection.createIndex({ symbol: 1, publishedAt: -1 });
       await this.collection.createIndex({ createdAt: -1 });
       await this.collection.createIndex({ sentiment: 1 });
+      await this.collection.createIndex({ urgencyScore: -1 });
+      await this.collection.createIndex({ priority: 1 });
 
       console.log('✅ [MongoDB] Connected to centralized MongoDB cluster.');
     } catch (err) {
@@ -109,6 +117,10 @@ export class PredictionStorageService {
       probabilities: classification.probabilities,
       rawChoice: classification.rawChoice,
       createdAt: new Date().toISOString(),
+      priority: classification.priority,
+      priorityConfidence: classification.priorityConfidence,
+      isBreaking: classification.isBreaking,
+      urgencyScore: classification.urgencyScore,
     };
 
     // Always update local memory store
@@ -126,17 +138,21 @@ export class PredictionStorageService {
   }
 
   /**
-   * Fetches recent news articles ordered by publication date.
+   * Fetches recent news articles ordered by publication date or urgency score.
    */
   public async getRecentNews(
     limit = 50,
     symbol?: string,
-    sentiment?: 1 | 0
+    sentiment?: 1 | 0,
+    priority?: 'BREAKING_CRITICAL' | 'NOTABLE_CATALYST' | 'ROUTINE_NOISE',
+    breakingOnly = false
   ): Promise<StoredArticle[]> {
     if (this.collection) {
       const query: Record<string, unknown> = {};
       if (symbol) query['symbol'] = symbol.toUpperCase();
       if (sentiment !== undefined) query['sentiment'] = sentiment;
+      if (priority) query['priority'] = priority;
+      if (breakingOnly) query['isBreaking'] = true;
 
       return await this.collection
         .find(query)
@@ -152,6 +168,12 @@ export class PredictionStorageService {
     }
     if (sentiment !== undefined) {
       items = items.filter((item) => item.sentiment === sentiment);
+    }
+    if (priority) {
+      items = items.filter((item) => item.priority === priority);
+    }
+    if (breakingOnly) {
+      items = items.filter((item) => item.isBreaking);
     }
 
     return items
@@ -274,6 +296,10 @@ export class PredictionStorageService {
         rawChoice: 'bullish',
         createdAt: new Date().toISOString(),
         audioBase64: base64,
+        priority: 'ROUTINE_NOISE',
+        priorityConfidence: 1,
+        isBreaking: false,
+        urgencyScore: 0,
       });
     }
 

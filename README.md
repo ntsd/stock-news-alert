@@ -103,7 +103,13 @@ The service embeds a dark-mode web application and REST API at `http://localhost
 5. **Cold-Start Storm Protection & Dual-Eviction LRU:**
    - 10,000 entry LRU cache with 48h TTL keeps memory $< 1\text{MB}$ heap.
    - Baseline seeding prevents startup alert floods on boot.
-6. **Outbound Telegram Throttling with Strict HTML Escaping:**
+6. **Unified News Priority & Urgency Scoring:**
+   - TypeSafe Jev evaluates a unified multi-choice `news_priority` decision alongside directional sentiment in a single sub-second evaluation:
+     - `BREAKING_CRITICAL`: Unscheduled, high-volatility events (earnings surprises, CEO resignations, regulatory bans) trigger urgent push alerts and ElevenLabs audio broadcasts.
+     - `NOTABLE_CATALYST`: Business updates, analyst upgrades/downgrades, and partnerships trigger standard alerts.
+     - `ROUTINE_NOISE`: General commentary, opinion columns, and retrospective wrap-ups are safely filtered out of push alerts to prevent notification fatigue while staying searchable on the dashboard.
+     - Continuous `urgencyScore` ($0.0 - 1.0$) ranks top news across all watchlists.
+7. **Outbound Telegram Throttling with Strict HTML Escaping:**
    - Strict HTML escaping for `&`, `<`, and `>` ensures messages never fail on ticker symbols or financial punctuation (e.g. `AT&T`, `S&P 500`, `P/E > 25`).
 
 ---
@@ -144,10 +150,11 @@ Render reads [`render.yaml`](render.yaml) automatically to configure the web ser
 npm test
 ```
 
-7 unit tests verify:
+8 unit tests verify:
 - Bounded LRU Cache capacity and TTL expiration
-- Telegram HTML entity escaping (`&`, `<`, `>`)
+- Telegram HTML entity escaping (`&`, `<`, `>`) and priority banner rendering
 - Centralized MongoDB prediction caching and top stocks ranking
+- ElevenLabs synthesized audio buffer caching and retrieval
 
 ---
 

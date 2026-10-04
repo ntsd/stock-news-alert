@@ -50,8 +50,21 @@ export function formatNewsAlertHtml(
   const dateStr = new Date(article.datetime * 1000).toISOString().replace('T', ' ').substring(0, 16) + ' UTC';
   const confidenceBar = formatConfidenceBar(classification.confidence);
 
+  let priorityBanner = '📄 <b>[MARKET UPDATE]</b>';
+  if (classification.priority === 'BREAKING_CRITICAL') {
+    priorityBanner = '🚨 <b>[BREAKING CRITICAL ALERT]</b>';
+  } else if (classification.priority === 'NOTABLE_CATALYST') {
+    priorityBanner = '⚡ <b>[NOTABLE MARKET CATALYST]</b>';
+  }
+
+  const urgencyPercent = Math.round((classification.urgencyScore ?? 0) * 100);
+  const criticalProb = Math.round((classification.priorityProbabilities?.breaking_critical ?? 0) * 100);
+  const notableProb = Math.round((classification.priorityProbabilities?.notable_catalyst ?? 0) * 100);
+
   return [
+    priorityBanner,
     `${badgeEmoji} <b>[${escapedSymbol}] ${signalText}</b>`,
+    `<b>Urgency Score:</b> <code>${urgencyPercent}%</code> (Critical: ${criticalProb}% | Notable: ${notableProb}%)`,
     `<b>Confidence:</b> <code>${confidenceBar}</code>`,
     `<b>Probabilities:</b> Bullish ${(classification.probabilities.bullish * 100).toFixed(1)}% | Bearish ${(classification.probabilities.bearish * 100).toFixed(1)}%`,
     '',
