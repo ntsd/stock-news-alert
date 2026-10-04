@@ -32,6 +32,7 @@ export interface StoredArticle {
 }
 
 export interface NewsQueryOptions {
+  // Internal queries may use 0 for all matches; public feed pagination stays bounded.
   limit?: number;
   offset?: number;
   symbol?: string;
@@ -39,6 +40,7 @@ export interface NewsQueryOptions {
   sentiment?: 1 | 0;
   priority?: 'BREAKING_CRITICAL' | 'NOTABLE_CATALYST' | 'ROUTINE_NOISE';
   breakingOnly?: boolean;
+  unevaluatedOnly?: boolean;
   fromDate?: string;
   toDate?: string;
   sortBy?: 'date' | 'impact' | 'confidence';
@@ -179,17 +181,19 @@ export class PredictionStorageService {
   /**
    * Fetches recently stored article IDs to warm up the in-memory deduplication cache on startup.
    */
-  public async getRecentArticleIds(limit = 10000): Promise<number[]> {
+  public async getRecentArticleIds(limit = 10000, watchlist?: string[]): Promise<number[]> {
+    const symbols = watchlist?.map(symbol => symbol.toUpperCase());
     return traceSpan('mongo.get_recent_article_ids', 'db.read', { limit }, async () => {
       if (this.collection) {
         const docs = await this.collection
-          .find({ evaluatedBy: 'jev' }, { projection: { _id: 1 } })
+          .find({ evaluatedBy: 'jev', ...(symbols ? { symbol: { $in: symbols } } : {}) }, { projection: { _id: 1 } })
           .sort({ publishedAt: -1 })
           .limit(limit)
           .toArray();
         return docs.map((doc) => doc._id);
       }
-      return Array.from(this.memoryStore.values()).filter(doc => doc.evaluatedBy === 'jev').slice(0, limit).map(doc => doc._id);
+      return Array.from(this.memoryStore.values()).filter(doc => doc.evaluatedBy === 'jev'
+        && (!symbols || symbols.includes(doc.symbol.toUpperCase()))).slice(0, limit).map(doc => doc._id);
     });
   }
 
@@ -360,20 +364,21 @@ export class PredictionStorageService {
    * Returns a list of symbols that already have historical articles or sync metadata stored in MongoDB,
   * for startup reporting; query coverage is checked independently by the poller.
    */
-  public async getSeededSymbols(): Promise<string[]> {
+  public async getSeededSymbols(watchlist?: string[]): Promise<string[]> {
+    const symbols = watchlist?.map(symbol => symbol.toUpperCase());
     return traceSpan('mongo.get_seeded_symbols', 'db.read', {}, async () => {
       const set = new Set<string>();
 
       if (this.syncCollection) {
-        const allMeta = await this.syncCollection.find({}, { projection: { _id: 1 } }).toArray();
+        const allMeta = await this.syncCollection.find(symbols ? { _id: { $in: symbols } } : {}, { projection: { _id: 1 } }).toArray();
         for (const m of allMeta) {
           set.add(String(m._id).toUpperCase());
         }
       }
 
       if (this.collection) {
-        const symbols = await this.collection.distinct('symbol');
-        for (const s of symbols) {
+        const storedSymbols = await this.collection.distinct('symbol', symbols ? { symbol: { $in: symbols } } : {});
+        for (const s of storedSymbols) {
           set.add(String(s).toUpperCase());
         }
       }
@@ -385,7 +390,7 @@ export class PredictionStorageService {
         if (art.symbol) set.add(art.symbol.toUpperCase());
       }
 
-      return Array.from(set);
+      return Array.from(set).filter(symbol => !symbols || symbols.includes(symbol));
     });
   }
 
@@ -476,6 +481,7 @@ export class PredictionStorageService {
       if (opts.sentiment !== undefined) query['sentiment'] = opts.sentiment;
       if (opts.priority) query['priority'] = opts.priority;
       if (opts.breakingOnly) query['isBreaking'] = true;
+      if (opts.unevaluatedOnly) query['evaluatedBy'] = { $ne: 'jev' };
 
       if (opts.fromDate || opts.toDate) {
         const dateRange: Record<string, string> = {};
@@ -505,6 +511,7 @@ export class PredictionStorageService {
 
     // Fallback: query memory store
     let items = Array.from(this.memoryStore.values());
+    if (opts.unevaluatedOnly) items = items.filter(item => item.evaluatedBy !== 'jev');
 
     if (opts.symbols && opts.symbols.length > 0) {
       const symSet = new Set(opts.symbols.map((s) => s.toUpperCase()));
@@ -550,7 +557,7 @@ export class PredictionStorageService {
         || new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime() || b._id - a._id);
     }
 
-    return items.slice(offset, offset + limit);
+    return limit === 0 ? items.slice(offset) : items.slice(offset, offset + limit);
   }
 
   /**

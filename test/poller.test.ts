@@ -88,6 +88,50 @@ describe('NewsAlertPoller scheduling', () => {
 });
 
 describe('NewsAlertPoller sync coverage', () => {
+  it('evaluates unverified Mongo news once on cold start without Finnhub or alerts', async (t) => {
+    t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-10-05T12:00:00Z') });
+    const s = setup(t);
+    for (const item of [article(300, '2026-10-05T11:00:00Z'),
+      article(301, '2026-09-01'), article(302, '2026-10-04'),
+      article(303, '2026-10-06'), { ...article(304, '2026-10-04'), related: 'MSFT' }]) {
+      await s.storage.savePrediction(item, result);
+      if (item.id !== 302) delete (await s.storage.getCachedPrediction(item.id))!.evaluatedBy;
+    }
+    await s.storage.setSyncRange('AAPL', '2026-09-28', '2026-10-05', 0, new Date(), true);
+    await s.tick();
+    assert.equal(s.classify.mock.callCount(), 1);
+    const evaluated = s.classify.mock.calls[0]?.arguments[0];
+    assert.ok(evaluated);
+    assert.equal(evaluated.id, 300);
+    assert.equal((await s.storage.getCachedPrediction(300))?.evaluatedBy, 'jev');
+    for (const id of [301, 303, 304]) assert.equal((await s.storage.getCachedPrediction(id))?.evaluatedBy, undefined);
+    assert.equal(s.sendAlert.mock.callCount(), 0);
+    await s.tick();
+    assert.equal(s.classify.mock.callCount(), 1);
+  });
+
+  it('retries cold-start inference and writes, reusing completed records after restart', async (t) => {
+    const s = setup(t);
+    for (const id of [310, 311]) {
+      await s.storage.savePrediction(article(id, new Date(Date.now() - (312 - id) * 1000).toISOString()), result);
+      delete (await s.storage.getCachedPrediction(id))!.evaluatedBy;
+    }
+    s.classify.mock.mockImplementationOnce(async () => { throw new Error('Jev unavailable'); });
+    await s.tick();
+    assert.equal((await s.storage.getCachedPrediction(310))?.evaluatedBy, undefined);
+    assert.equal((await s.storage.getCachedPrediction(311))?.evaluatedBy, 'jev');
+    const save = t.mock.method(s.storage, 'savePrediction', async () => { throw new Error('Mongo unavailable'); });
+    await s.tick();
+    assert.equal((await s.storage.getCachedPrediction(310))?.evaluatedBy, undefined);
+    save.mock.restore();
+    const restarted = setup(t, s.storage);
+    await restarted.tick();
+    assert.equal(restarted.classify.mock.callCount(), 1);
+    assert.equal((await s.storage.getCachedPrediction(310))?.evaluatedBy, 'jev');
+    assert.equal(s.sendAlert.mock.callCount(), 0);
+    assert.equal(restarted.sendAlert.mock.callCount(), 0);
+  });
+
   it('evaluates every historical article, repairs legacy labels, and stays silent', async (t) => {
     t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-10-05T12:00:00Z') });
     const s = setup(t, undefined, 365); // Constructor also caps direct callers.

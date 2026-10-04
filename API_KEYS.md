@@ -8,7 +8,7 @@ This guide provides step-by-step walkthroughs for obtaining and configuring all 
 
 | Environment Variable | Required | Cost | Primary Purpose |
 | :--- | :---: | :---: | :--- |
-| [`FINNHUB_API_KEY`](#1-finnhub-api-key) | **Yes** | **Free** | Market news stream across 27 US and Hong Kong ADR equities |
+| [`FINNHUB_API_KEY`](#1-finnhub-api-key) | **Yes** | **Free** | Market news stream across 12 US and Hong Kong ADR equities |
 | [`TYPESAFE_API_KEY`](#2-typesafe-ai-api-key) | **Yes** | **Free Tier** | System 1 Jev decision model (market sentiment & urgency scoring) |
 | [`TELEGRAM_BOT_TOKEN`](#3-telegram-bot-token--chat-id-optional) | No | **Free** | Telegram push alerts (omitted = dashboard-only mode) |
 | [`TELEGRAM_CHAT_ID`](#3-telegram-bot-token--chat-id-optional) | No | **Free** | Target Telegram recipient or channel ID |
@@ -183,7 +183,7 @@ These optional variables allow you to customize scheduling pace and watchlist sc
 
 | Variable | Default | Description |
 | :--- | :---: | :--- |
-| `WATCHLIST` | 27 tech & ADR tickers | Comma-separated list of symbols (e.g. `AAPL,NVDA,TSLA,MSFT`) |
+| `WATCHLIST` | 12 tech & ADR tickers | Comma-separated list of symbols (e.g. `AAPL,NVDA,TSLA,MSFT`) |
 | `POLL_INTERVAL_MS` | `2000` | Paced tick interval in ms (2000ms = 30 req/min, free cap: 60/min) |
 | `MIN_CONFIDENCE` | `0.50` | Minimum confidence cutoff to filter out ambiguous headlines |
 | `HISTORY_SYNC_DAYS`| `7` | Recent news sync lookback (integer 1–7 days); scheduler caps lookback at seven days even after downtime. Price history and archive retention are unaffected. |
@@ -232,7 +232,7 @@ SENTRY_DSN=https://examplePublicKey@o0.ingest.sentry.io/123456
 # =====================================================
 # OPERATIONAL TUNING
 # =====================================================
-WATCHLIST=AAPL,MSFT,NVDA,GOOGL,AMZN,META,TSLA,AMD,AVGO,QCOM,TSM,ARM,PLTR,NFLX,CRM,ORCL,COIN,UBER,BABA,TCEHY,BYDDY,BIDU,JD,PDD,NIO,LI,XIACY
+WATCHLIST=AAPL,MSFT,NVDA,GOOGL,AMZN,META,TSLA,AMD,TSM,BABA,TCEHY,XIACY
 POLL_INTERVAL_MS=2000
 MIN_CONFIDENCE=0.50
 HISTORY_SYNC_DAYS=7

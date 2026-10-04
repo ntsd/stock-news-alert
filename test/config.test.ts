@@ -10,12 +10,11 @@ describe('Environment Configuration & Validation', () => {
     TELEGRAM_CHAT_ID: '123456789',
   };
 
-  it('defaults to the exact 27-symbol watchlist', () => {
+  it('defaults to the exact 12-symbol watchlist', () => {
     const result = envSchema.parse(baseValidEnv);
     assert.deepEqual(result.WATCHLIST, [
       'AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN', 'META', 'TSLA', 'AMD',
-      'AVGO', 'QCOM', 'TSM', 'ARM', 'PLTR', 'NFLX', 'CRM', 'ORCL', 'COIN', 'UBER',
-      'BABA', 'TCEHY', 'BYDDY', 'BIDU', 'JD', 'PDD', 'NIO', 'LI', 'XIACY',
+      'TSM', 'BABA', 'TCEHY', 'XIACY',
     ]);
   });
 

@@ -309,7 +309,10 @@ export function createWebServer(options: WebServerOptions): http.Server {
         const news = await storage.getRecentNews({
           symbol,
           fromDate,
-          limit: 100,
+          toDate: new Date(now).toISOString(),
+          // ponytail: load the bounded date window for existing client-side pagination;
+          // switch to server-side pagination if a week's payload becomes too large.
+          limit: 0,
           sortBy: 'date',
         });
 
@@ -1685,6 +1688,28 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
 
     <!-- View 1: Main Radar Dashboard -->
     <div id="radarDashboardView">
+      <!-- Shared Date Range: spotlight and news feed -->
+      <div class="controls-panel" id="dashboardFilters">
+        <div class="controls-row">
+          <div class="control-group">
+            <span class="control-label">📅 Date Range:</span>
+            <div class="pill-buttons" id="datePresetPills">
+              <button class="control-btn active" data-days="3" onclick="setDateRangePreset(3, this)">3D (Default)</button>
+              <button class="control-btn" data-days="1" onclick="setDateRangePreset(1, this)">24H</button>
+              <button class="control-btn" data-days="7" onclick="setDateRangePreset(7, this)">7D</button>
+              <button class="control-btn" onclick="toggleCustomDatePicker(this)">Custom</button>
+            </div>
+            <div class="custom-date-inputs" id="customDateInputs">
+              <input type="date" class="date-input" id="fromDateInput">
+              <span style="color:var(--text-sub);">to</span>
+              <input type="date" class="date-input" id="toDateInput">
+              <button class="preset-btn" onclick="applyCustomDateRange()">Apply</button>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
       <!-- Multi-Select Interest Symbols Panel -->
       <div class="interest-panel" id="interestPanel">
         <div class="interest-top-bar">
@@ -1737,32 +1762,15 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
         <div class="stock-card"><p style="color:#64748B;">Loading watchlist telemetry...</p></div>
       </div>
 
-      <!-- Breaking News Feed & Filters -->
+      <!-- Breaking News Feed -->
       <div class="section-header" style="margin-top: 40px;">
         <div class="section-title">
           <span>📰 Real-Time News Signals</span>
         </div>
       </div>
 
-      <div class="controls-panel">
-        <!-- Row 1: Date Range Filter & Order By -->
+      <div class="controls-panel" id="newsFilters">
         <div class="controls-row">
-          <div class="control-group">
-            <span class="control-label">📅 Date Range:</span>
-            <div class="pill-buttons" id="datePresetPills">
-              <button class="control-btn active" data-days="3" onclick="setDateRangePreset(3, this)">3D (Default)</button>
-              <button class="control-btn" data-days="1" onclick="setDateRangePreset(1, this)">24H</button>
-              <button class="control-btn" data-days="7" onclick="setDateRangePreset(7, this)">7D</button>
-              <button class="control-btn" onclick="toggleCustomDatePicker(this)">Custom</button>
-            </div>
-            <div class="custom-date-inputs" id="customDateInputs">
-              <input type="date" class="date-input" id="fromDateInput">
-              <span style="color:var(--text-sub);">to</span>
-              <input type="date" class="date-input" id="toDateInput">
-              <button class="preset-btn" onclick="applyCustomDateRange()">Apply</button>
-            </div>
-          </div>
-
           <div class="control-group">
             <span class="control-label">⚡ Order By:</span>
             <select class="select-dropdown" id="sortSelect" onchange="onSortChange(this.value)">
@@ -1771,10 +1779,6 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
               <option value="confidence">🎯 Highest Confidence</option>
             </select>
           </div>
-        </div>
-
-        <!-- Row 2: Signal Classification & Specific Ticker -->
-        <div class="controls-row">
           <div class="control-group">
             <span class="control-label">🎯 Signal:</span>
             <div class="pill-buttons">
@@ -1785,7 +1789,6 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
               <button class="control-btn" onclick="setSentimentFilter('0', this)">🔴 Bearish</button>
             </div>
           </div>
-
           <div class="control-group">
             <span class="control-label">🔍 Ticker:</span>
             <select class="select-dropdown" id="singleSymbolSelect" onchange="onSingleSymbolChange(this.value)">

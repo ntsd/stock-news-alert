@@ -44,7 +44,7 @@ Breaking News Article ──► Jev System 1 Decision ──► Typed Binary Sig
 ```mermaid
 flowchart TD
     subgraph Scheduler ["Deterministic Scheduler & Rate Limiter"]
-        A["Circular Watchlist Queue<br/>27 Tickers: US + HK ADRs"] -->|Paced 2.0s Tick| B["Finnhub News Client"]
+        A["Circular Watchlist Queue<br/>12 Tickers: US + HK ADRs"] -->|Paced 2.0s Tick| B["Finnhub News Client"]
     end
 
     subgraph External ["Finnhub & Yahoo Finance"]
@@ -127,7 +127,7 @@ The service embeds a dark-mode web application and REST API:
     - **Bounded News Window:** `HISTORY_SYNC_DAYS` accepts integers from 1 to 7, default 7. Initial sync fetches the configured recent window per ticker. The scheduler caps news lookback at seven days even after longer downtime; it does not backfill older downtime gaps.
     - **Shared Jev Evaluation:** Every fetched uncached article is genuinely evaluated by Jev through the same live/historical processing path. No fake baseline prediction or fake error fallback is stored. Stored predictions carry `evaluatedBy: 'jev'`.
     - **Silent Sync & Retries:** Historical sync populates the dashboard without Telegram alerts or automatic voice dispatches. MongoDB `sync_metadata` tracks inclusive UTC dates `syncedFrom` and `syncedTo`, with `evaluatedAll: true` marking fully evaluated coverage. Fetch or evaluation failures are retried, and the sync checkpoint is not advanced on failure.
-    - **First Rollout / Legacy Records:** The first rollout silently re-fetches the configured recent window and re-evaluates unmarked legacy predictions, including previously genuine Jev results whose provenance was not recorded. This one-time re-evaluation makes real Jev API calls and may incur paid usage beyond the free allowance.
+    - **Cold Start / Legacy Records:** On each symbol's first poll after startup, query MongoDB for predictions not marked `evaluatedBy: 'jev'` within the configured recent window (maximum seven days), even if Finnhub no longer returns them. Evaluate silently without Telegram or voice alerts; successful writes are reused across restarts, and failures retry on the next symbol turn. Older archive records remain untouched. Unmarked previously genuine results are also re-evaluated because their provenance is unknown; this makes real Jev API calls and may incur paid usage beyond the free allowance.
     - **Retention:** Older MongoDB news and prices remain stored. The seven-day limit applies to news fetching, UI date controls, and public chart windows, not archive retention; no MongoDB TTL or deletion is added. Full daily price archiving for future backtests is unchanged.
    - **Continuous Live Polling:** Rolls continuously over the active window, alerting breaking news in sub-second latency.
 6. **Unified News Priority & Urgency Scoring:**
@@ -177,7 +177,7 @@ Set or override `HISTORY_SYNC_DAYS=7` in the Render service's environment settin
 | `ELEVENLABS_VOICE_ID` | No | `pNInz6obpgDQGcFmaJgB` | ElevenLabs Voice ID (Adam - financial broadcast) |
 | `ENABLE_VOICE_ALERTS`| No | `true` | Enables ElevenLabs voice note alerts in Telegram |
 | `SENTRY_DSN` | No | — | Sentry DSN for Agent Tracing & performance monitoring |
-| `WATCHLIST` | No | AAPL,MSFT,NVDA,GOOGL,AMZN,META,TSLA,AMD,AVGO,QCOM,TSM,ARM,PLTR,NFLX,CRM,ORCL,COIN,UBER,BABA,TCEHY,BYDDY,BIDU,JD,PDD,NIO,LI,XIACY | Comma-separated list of ticker symbols |
+| `WATCHLIST` | No | AAPL,MSFT,NVDA,GOOGL,AMZN,META,TSLA,AMD,TSM,BABA,TCEHY,XIACY | Comma-separated list of ticker symbols |
 | `POLL_INTERVAL_MS` | No | `2000` | Paced interval between ticker polls (30 req/min) |
 | `MIN_CONFIDENCE` | No | `0.50` | Minimum confidence cutoff (0.0 to 1.0) |
 | `HISTORY_SYNC_DAYS` | No | `7` | Recent news sync lookback in days (integer 1–7); scheduler never fetches beyond seven days, even after downtime. Does not limit price history or archive retention. |

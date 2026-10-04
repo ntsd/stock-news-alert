@@ -5,6 +5,61 @@ import type { FinnhubNewsArticle } from '../src/types/finnhub.js';
 import type { JevSentimentResult } from '../src/types/jev.js';
 
 describe('PredictionStorageService (Centralized Prediction Cache)', () => {
+  it('scopes startup Mongo queries and memory loading to the configured watchlist', async () => {
+    const storage = new PredictionStorageService();
+    await storage.saveAudio(1, Buffer.from('test'));
+    await storage.saveAudio(2, Buffer.from('test'));
+    Object.assign((await storage.getCachedPrediction(1))!, { symbol: 'AAPL', evaluatedBy: 'jev' });
+    Object.assign((await storage.getCachedPrediction(2))!, { symbol: 'ORCL', evaluatedBy: 'jev' });
+    await storage.setSyncRange('AAPL', '2026-09-28', '2026-10-05');
+    await storage.setSyncRange('ORCL', '2026-09-28', '2026-10-05');
+    assert.deepEqual(await storage.getRecentArticleIds(10000, ['aapl']), [1]);
+    assert.deepEqual(await storage.getSeededSymbols(['aapl']), ['AAPL']);
+    assert.deepEqual(await storage.getRecentArticleIds(10000, []), []);
+    assert.deepEqual(await storage.getSeededSymbols([]), []);
+    Object.assign(storage, {
+      collection: {
+        find(query: unknown) {
+          assert.deepEqual(query, { evaluatedBy: 'jev', symbol: { $in: ['AAPL'] } });
+          return { sort() { return this; }, limit() { return this; }, async toArray() { return [{ _id: 1 }]; } };
+        },
+        async distinct(field: string, query: unknown) {
+          assert.equal(field, 'symbol');
+          assert.deepEqual(query, { symbol: { $in: ['AAPL'] } });
+          return ['AAPL'];
+        },
+      },
+      syncCollection: {
+        find(query: unknown) {
+          assert.deepEqual(query, { _id: { $in: ['AAPL'] } });
+          return { async toArray() { return [{ _id: 'AAPL' }]; } };
+        },
+      },
+    });
+    assert.deepEqual(await storage.getRecentArticleIds(10000, ['aapl']), [1]);
+    assert.deepEqual(await storage.getSeededSymbols(['aapl']), ['AAPL']);
+  });
+
+  it('queries unverified Mongo documents within the cold-start date window without a count cap', async () => {
+    const storage = new PredictionStorageService();
+    const cursor = {
+      sort() { return this; }, skip() { return this; },
+      limit(value: number) { assert.equal(value, 0); return this; },
+      async toArray() { return []; },
+    };
+    Object.assign(storage, { collection: {
+      find(query: unknown) {
+        assert.deepEqual(query, {
+          symbol: 'AAPL', evaluatedBy: { $ne: 'jev' },
+          publishedAt: { $gte: '2026-09-28T00:00:00.000Z', $lte: '2026-10-05T12:00:00.000Z' },
+        });
+        return cursor;
+      },
+    } });
+    await storage.getRecentNews({ symbol: 'AAPL', unevaluatedOnly: true, limit: 0,
+      fromDate: '2026-09-28', toDate: '2026-10-05T12:00:00.000Z' });
+  });
+
   it('should save and retrieve cached predictions (shared weight cache)', async () => {
     const storage = new PredictionStorageService();
     await storage.init();

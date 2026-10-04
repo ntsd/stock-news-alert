@@ -281,6 +281,15 @@ describe('Web Server & API Endpoints', () => {
     assert.ok(res.raw.includes('Top Impact News on Watched Symbols'));
     assert.ok(res.raw.includes('Highest Impact (Urgency Score)'));
     assert.ok(res.raw.includes('3D (Default)'));
+    assert.ok(res.raw.indexOf('id="dashboardFilters"') < res.raw.indexOf('id="interestPanel"'));
+    const sharedFilters = res.raw.slice(res.raw.indexOf('id="dashboardFilters"'), res.raw.indexOf('id="interestPanel"'));
+    assert.ok(sharedFilters.includes('id="datePresetPills"'));
+    assert.ok(!sharedFilters.includes('id="sortSelect"'));
+    assert.ok(!sharedFilters.includes('setSentimentFilter'));
+    assert.ok(!sharedFilters.includes('id="singleSymbolSelect"'));
+    assert.ok(res.raw.indexOf('id="newsFilters"') > res.raw.indexOf('📰 Real-Time News Signals'));
+    assert.ok(res.raw.indexOf('id="newsFilters"') < res.raw.indexOf('id="newsList"'));
+    assert.equal((res.raw.match(/id="datePresetPills"/g) || []).length, 1);
     assert.ok(!res.raw.includes('data-days="30"'));
     assert.ok(!res.raw.includes('data-days="365"'));
     assert.ok(res.raw.includes('aria-label="News feed pagination"'));
@@ -468,5 +477,36 @@ describe('Web Server & API Endpoints', () => {
     assert.ok(nvda);
     assert.equal(nvda.price, 125.5);
     assert.equal(nvda.change, 3.25);
+  });
+
+  it('returns all symbol news in the selected date window for UI pagination', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const classification = {
+      sentiment: 1 as const, label: 'BULLISH' as const, confidence: 0.9,
+      probabilities: { bullish: 0.9, bearish: 0.1 }, rawChoice: 'bullish' as const,
+      priority: 'NOTABLE_CATALYST' as const, priorityConfidence: 0.9,
+      priorityProbabilities: { breaking_critical: 0.1, notable_catalyst: 0.8, routine_noise: 0.1 },
+      isBreaking: false, urgencyScore: 0.6,
+    };
+    for (let i = 0; i < 128; i++) {
+      await storage.savePrediction({
+        id: 8000 + i, category: 'company', related: i === 127 ? 'OTHER' : 'MSFT',
+        datetime: i === 125 ? now - 9 * 86400 : i === 126 ? now + 86400
+          : now - (i === 124 ? 3 * 86400 : 3600) - i,
+        headline: 'News ' + i, summary: '', source: 'Test', url: '', image: '',
+      }, classification);
+    }
+    const week = await get('/api/chart/MSFT?range=7d');
+    assert.equal(week.status, 200);
+    assert.equal(week.data.news.length, 125);
+    assert.ok(week.data.news.every((n: any) => n.symbol === 'MSFT'));
+    assert.ok(week.data.news.some((n: any) => n._id === 8124));
+    for (const id of [8125, 8126, 8127]) {
+      assert.ok(!week.data.news.some((n: any) => n._id === id));
+    }
+    const day = await get('/api/chart/MSFT?range=24h');
+    assert.equal(day.data.news.length, 124);
+    assert.ok(!day.data.news.some((n: any) => n._id === 8124));
+    assert.equal((await storage.getRecentNews({ symbol: 'MSFT', limit: 10 })).length, 10);
   });
 });

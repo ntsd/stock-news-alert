@@ -47,7 +47,7 @@ const telegramService = new TelegramAlertService(
 const deduplicator = new BoundedTtlLruCache(10000, 48 * 60 * 60 * 1000);
 
 // Warm up deduplication cache from persistent storage to prevent duplicate alerts on restart
-const existingIds = await storage.getRecentArticleIds(10000);
+const existingIds = await storage.getRecentArticleIds(10000, config.watchlist);
 for (const id of existingIds) {
   deduplicator.add(id);
 }
@@ -55,7 +55,7 @@ if (existingIds.length > 0) {
   console.log(`📦 [Cache] Warmed up deduplicator with ${existingIds.length} historical article IDs from storage.`);
 }
 
-const seededSymbols = await storage.getSeededSymbols();
+const seededSymbols = await storage.getSeededSymbols(config.watchlist);
 if (seededSymbols.length > 0) {
   console.log(`🌱 [Storage] Loaded ${seededSymbols.length} pre-seeded symbols from storage: [${seededSymbols.join(', ')}]`);
 }

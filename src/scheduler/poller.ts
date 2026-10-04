@@ -60,6 +60,7 @@ export class NewsAlertPoller {
 
   // Track symbols that have completed cold-start historical evaluation.
   private readonly seededSymbols = new Set<string>();
+  private readonly coldStartEvaluatedSymbols = new Set<string>();
 
   // Operational metrics
   private totalPolls = 0;
@@ -93,6 +94,7 @@ export class NewsAlertPoller {
 
   public start(): void {
     if (this.isRunning) return;
+    this.coldStartEvaluatedSymbols.clear();
     this.isRunning = true;
 
     console.log(
@@ -156,6 +158,19 @@ export class NewsAlertPoller {
         const oneDay = 24 * 60 * 60 * 1000;
         const historyFrom = new Date(now.getTime() - this.historySyncDays * oneDay)
           .toISOString().split('T')[0]!;
+        if (!this.coldStartEvaluatedSymbols.has(symbol)) {
+          const pending = await this.storage.getRecentNews({
+            symbol, fromDate: historyFrom, toDate: now.toISOString(),
+            unevaluatedOnly: true, limit: 0, sortBy: 'date',
+          });
+          await this.processArticlesForSymbol(symbol, pending.map(doc => ({
+            id: doc._id, related: doc.symbol, datetime: Date.parse(doc.publishedAt) / 1000,
+            category: 'company', headline: doc.headline, summary: doc.summary,
+            source: doc.source, url: doc.url, image: '',
+          })), true);
+          // Mark only after every write succeeds; a failed batch retries on the next turn.
+          this.coldStartEvaluatedSymbols.add(symbol);
+        }
         let toDate = now.toISOString().split('T')[0]!;
         let fromDate: string;
         // Legacy metadata cannot prove historical coverage: re-seed once using cached predictions.
