@@ -117,4 +117,44 @@ describe('PredictionStorageService (Centralized Prediction Cache)', () => {
     assert.ok(retrieved);
     assert.equal(retrieved.toString(), 'mock-mp3-audio-data-elevenlabs');
   });
+
+  it('should fetch recent article IDs for warming up deduplicator', async () => {
+    const storage = new PredictionStorageService();
+    await storage.init();
+
+    const makeArticle = (id: number, symbol: string, sentiment: 1 | 0): [FinnhubNewsArticle, JevSentimentResult] => [
+      {
+        category: 'company',
+        datetime: Math.floor(Date.now() / 1000),
+        headline: `${symbol} test headline ${id}`,
+        id,
+        image: '',
+        related: symbol,
+        source: 'Finnhub',
+        summary: 'Summary text',
+        url: '',
+      },
+      {
+        sentiment,
+        label: sentiment === 1 ? 'BULLISH' : 'BEARISH',
+        confidence: 0.9,
+        probabilities: { bullish: sentiment === 1 ? 0.9 : 0.1, bearish: sentiment === 1 ? 0.1 : 0.9 },
+        rawChoice: sentiment === 1 ? 'bullish' : 'bearish',
+        priority: 'NOTABLE_CATALYST',
+        priorityConfidence: 0.88,
+        priorityProbabilities: { breaking_critical: 0.2, notable_catalyst: 0.7, routine_noise: 0.1 },
+        isBreaking: false,
+        urgencyScore: 0.55,
+      },
+    ];
+
+    const [a1, c1] = makeArticle(101, 'TSLA', 1);
+    const [a2, c2] = makeArticle(102, 'TSLA', 0);
+    await storage.savePrediction(a1, c1);
+    await storage.savePrediction(a2, c2);
+
+    const ids = await storage.getRecentArticleIds(10);
+    assert.ok(ids.includes(101));
+    assert.ok(ids.includes(102));
+  });
 });

@@ -97,6 +97,23 @@ export class PredictionStorageService {
   }
 
   /**
+   * Fetches recently stored article IDs to warm up the in-memory deduplication cache on startup.
+   */
+  public async getRecentArticleIds(limit = 10000): Promise<number[]> {
+    return traceSpan('mongo.get_recent_article_ids', 'db.read', { limit }, async () => {
+      if (this.collection) {
+        const docs = await this.collection
+          .find({}, { projection: { _id: 1 } })
+          .sort({ publishedAt: -1 })
+          .limit(limit)
+          .toArray();
+        return docs.map((doc) => doc._id);
+      }
+      return Array.from(this.memoryStore.keys()).slice(0, limit);
+    });
+  }
+
+  /**
    * Persists an article with its Jev System 1 classification into centralized storage.
    */
   public async savePrediction(

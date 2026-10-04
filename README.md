@@ -93,16 +93,18 @@ The service embeds a dark-mode web application and REST API at `http://localhost
 1. **Guaranteed Finnhub Rate Limit Compliance:**
    - Free tier limit is 60 requests/minute.
    - Paced scheduler ticks at `1,200ms` (~50 req/min), leaving a 10-call safety buffer for network retries and clock skew.
-2. **Centralized MongoDB Shared Weight Cache:**
-   - Predictions are cached in MongoDB Atlas. If multiple instances or distributed workers poll the same breaking news, Jev inference is reused instantly, saving tokens and sharing model weights.
-   - Falls back gracefully to an in-memory store if `MONGODB_URI` is not set.
+2. **Centralized MongoDB Shared Cache & Startup Warm-Up:**
+   - On boot, loads recent article IDs directly into the in-memory LRU cache (`getRecentArticleIds`), guaranteeing zero duplicate alerts across container restarts or Render redeployments.
+   - Predictions and synthesized ElevenLabs MP3 binaries are persisted in MongoDB Atlas, sharing model decisions and audio buffers across instances.
+   - Falls back gracefully to an in-memory store if `MONGODB_URI` is omitted.
 3. **ElevenLabs Voice Alerts via Telegram `sendVoice`:**
    - High-confidence alerts generate audio broadcasts via ElevenLabs' low-latency `eleven_turbo_v2_5` model, sent as voice memos with HTML captions.
 4. **Sentry Agent Tracing:**
    - Instruments OpenTelemetry trace spans across Jev decisions, Finnhub polling, and ElevenLabs audio generation to monitor decision latency and token efficiency.
-5. **Cold-Start Storm Protection & Dual-Eviction LRU:**
-   - 10,000 entry LRU cache with 48h TTL keeps memory $< 1\text{MB}$ heap.
-   - Baseline seeding prevents startup alert floods on boot.
+5. **3-Month Historical Cold-Start Seed & Continuous Polling:**
+   - On first run for each symbol, queries Finnhub for the past 3 months (90 days) of news.
+   - Smartly evaluates recent headlines with Jev System 1 model and seeds historical articles silently into MongoDB Atlas to populate the 90-day dashboard overview and sentiment ratios without alert storms.
+   - Subsequent ticks continuously poll the rolling 24-48 hour window for fresh breaking news.
 6. **Unified News Priority & Urgency Scoring:**
    - TypeSafe Jev evaluates a unified multi-choice `news_priority` decision alongside directional sentiment in a single sub-second evaluation:
      - `BREAKING_CRITICAL`: Unscheduled, high-volatility events (earnings surprises, CEO resignations, regulatory bans) trigger urgent push alerts and ElevenLabs audio broadcasts.

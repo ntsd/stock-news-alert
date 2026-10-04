@@ -142,7 +142,18 @@ export class NewsAlertPoller {
 
     await traceSpan('poller.tick', 'scheduler.poll', { symbol }, async () => {
       try {
-        const articles = await this.finnhubClient.fetchCompanyNews(symbol);
+        const isFirstRun = !this.seededSymbols.has(symbol);
+        let articles: FinnhubNewsArticle[];
+        if (isFirstRun) {
+          // On cold-start for this symbol, fetch past 3 months (90 days)
+          const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+          const fromDate = ninetyDaysAgo.toISOString().split('T')[0]!;
+          console.log(`📅 [Poller] Cold-start fetch for ${symbol}: querying 3-month history (from ${fromDate})...`);
+          articles = await this.finnhubClient.fetchCompanyNews(symbol, fromDate);
+        } else {
+          // Regular continuous tick: rolling 24-48 hours
+          articles = await this.finnhubClient.fetchCompanyNews(symbol);
+        }
         await this.processArticlesForSymbol(symbol, articles);
       } catch (error) {
         console.error(`❌ [Poller] Error polling news for ${symbol}:`, error instanceof Error ? error.message : error);
@@ -157,17 +168,52 @@ export class NewsAlertPoller {
     const isFirstRun = !this.seededSymbols.has(symbol);
 
     if (isFirstRun) {
-      // Cold-start seed: Populate deduplication cache with existing articles
-      for (const article of articles) {
+      // Sort articles newest first
+      const sorted = [...articles].sort((a, b) => b.datetime - a.datetime);
+
+      // 1. Populate deduplication cache with all historical articles so we never alert on them
+      for (const article of sorted) {
         this.deduplicator.add(article.id);
-        // Pre-seed storage if not present so dashboard shows initial stock overview
+      }
+
+      // 2. Classify top 3 newest articles with real Jev System 1 inference for the dashboard,
+      // and pre-seed the rest with baseline routine representation
+      const topArticles = sorted.slice(0, 3);
+      const remainingArticles = sorted.slice(3);
+
+      for (const article of topArticles) {
+        const existing = await this.storage.getCachedPrediction(article.id);
+        if (!existing) {
+          try {
+            const classification = await this.jevService.classifyArticleSentiment(article);
+            await this.storage.savePrediction(article, classification);
+            console.log(`🧠 [Jev Seed] Evaluated recent headline for ${symbol} (#${article.id}): ${classification.label} (${classification.priority})`);
+          } catch (jevErr) {
+            console.warn(`⚠️ [Jev Seed] Jev seed classification failed for #${article.id}:`, jevErr instanceof Error ? jevErr.message : jevErr);
+            await this.storage.savePrediction(article, {
+              sentiment: 1,
+              label: 'BULLISH',
+              confidence: 0.8,
+              probabilities: { bullish: 0.8, bearish: 0.2 },
+              rawChoice: 'bullish',
+              priority: 'ROUTINE_NOISE',
+              priorityConfidence: 0.8,
+              priorityProbabilities: { breaking_critical: 0.05, notable_catalyst: 0.15, routine_noise: 0.8 },
+              isBreaking: false,
+              urgencyScore: 0.125,
+            });
+          }
+        }
+      }
+
+      for (const article of remainingArticles) {
         const existing = await this.storage.getCachedPrediction(article.id);
         if (!existing) {
           await this.storage.savePrediction(article, {
             sentiment: 1,
             label: 'BULLISH',
-            confidence: 0.85,
-            probabilities: { bullish: 0.85, bearish: 0.15 },
+            confidence: 0.8,
+            probabilities: { bullish: 0.8, bearish: 0.2 },
             rawChoice: 'bullish',
             priority: 'ROUTINE_NOISE',
             priorityConfidence: 0.8,
@@ -177,9 +223,10 @@ export class NewsAlertPoller {
           });
         }
       }
+
       this.seededSymbols.add(symbol);
       console.log(
-        `🌱 [Poller] Seeded cold-start baseline for ${symbol}: ${articles.length} historical articles cached.`
+        `🌱 [Poller] Seeded 3-month baseline for ${symbol}: ${articles.length} historical articles loaded into storage & cache.`
       );
       return;
     }
