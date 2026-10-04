@@ -5,22 +5,51 @@ import type { FinnhubNewsArticle } from '../src/types/finnhub.js';
 import type { JevSentimentResult } from '../src/types/jev.js';
 
 describe('PredictionStorageService (Centralized Prediction Cache)', () => {
-  it('loads only requested equities statistics fields, excluding cached audio', async () => {
+  it('aggregates requested equities in Mongo and loads only their quotes', async () => {
     const storage = new PredictionStorageService();
     Object.assign(storage, { collection: {
-      find(query: unknown, options: unknown) {
-        assert.deepEqual(query, { symbol: { $in: ['AAPL'] } });
-        assert.deepEqual(options, { projection: {
-          symbol: 1, sentiment: 1, confidence: 1, label: 1, headline: 1, publishedAt: 1,
-        } });
-        return { async toArray() { return [{ symbol: 'AAPL', sentiment: 1, confidence: 0.9,
-          label: 'BULLISH', headline: 'Test', publishedAt: new Date().toISOString() }]; } };
+      aggregate(pipeline: any[]) {
+        assert.deepEqual(pipeline[0], { $match: { symbol: { $in: ['AAPL'] } } });
+        assert.deepEqual(pipeline[1], { $sort: { publishedAt: -1, _id: -1 } });
+        assert.deepEqual(pipeline[2].$group.lastHeadline, { $first: '$headline' });
+        return { async toArray() { return [{ _id: 'AAPL', total: 1, bullish: 1, bearish: 0, confidenceSum: 0.9,
+          lastSignal: 1, lastLabel: 'BULLISH', lastHeadline: 'Test', lastUpdated: '2026-10-05T12:00:00.000Z' }]; } };
+      },
+    }, quoteCollection: {
+      find(query: unknown) {
+        assert.deepEqual(query, { _id: { $in: ['AAPL'] } });
+        return { async toArray() { return []; } };
       },
     } });
     const stocks = await storage.getTopStocks(['aapl']);
     assert.equal(stocks[0]?.totalArticles, 1);
     assert.equal(stocks[0]?.bullishRatio, 1);
     assert.equal(stocks[0]?.avgConfidence, 0.9);
+    assert.equal(stocks[0]?.lastHeadline, 'Test');
+  });
+
+  it('projects audio only for playback, never for prediction or feed reads', async () => {
+    const storage = new PredictionStorageService();
+    Object.assign(storage, { collection: {
+      async findOne(_query: unknown, options: any) {
+        if (options.projection.audioBase64 === 1) return { audioBase64: Buffer.from('audio').toString('base64') };
+        assert.deepEqual(options, { projection: { audioBase64: 0 } });
+        return { _id: 1, symbol: 'AAPL' };
+      },
+    } });
+    assert.equal((await storage.getCachedPrediction(1))?.audioBase64, undefined);
+    assert.equal((await storage.getAudio(1))?.toString(), 'audio');
+    Object.assign(storage, { collection: {
+      find(_query: unknown, options: unknown) {
+        assert.deepEqual(options, { projection: { audioBase64: 0 } });
+        return { sort() { return this; }, skip() { return this; }, limit() { return this; }, async toArray() { return []; } };
+      },
+    } });
+    await storage.getRecentNews();
+    Object.assign(storage, { collection: null });
+    await storage.saveAudio(2, Buffer.from('cached audio'));
+    assert.equal((await storage.getRecentNews())[0]?.audioBase64, undefined);
+    assert.equal((await storage.getAudio(2))?.toString(), 'cached audio');
   });
 
   it('fails startup instead of falling back when a configured Mongo URI cannot initialize', async () => {
@@ -198,6 +227,7 @@ describe('PredictionStorageService (Centralized Prediction Cache)', () => {
     assert.equal(top[0]?.bullishRatio, 1);
     assert.equal(top[1]?.symbol, 'AAPL');
     assert.equal(top[1]?.bullishRatio, 0.5);
+    assert.notEqual(top[0]?.lastHeadline, 'Awaiting breaking news...');
   });
 
   it('should cache and retrieve synthesized ElevenLabs audio buffer', async () => {

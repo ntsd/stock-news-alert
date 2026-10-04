@@ -149,6 +149,11 @@ export class PredictionStorageService {
       await this.collection.createIndex({ sentiment: 1 });
       await this.collection.createIndex({ urgencyScore: -1 });
       await this.collection.createIndex({ priority: 1 });
+      await this.collection.createIndex({ symbol: 1, publishedAt: -1, createdAt: -1, _id: -1 });
+      await this.collection.createIndex({ publishedAt: -1, createdAt: -1, _id: -1 });
+      await this.collection.createIndex({ urgencyScore: -1, confidence: -1, publishedAt: -1, _id: -1 });
+      await this.collection.createIndex({ confidence: -1, publishedAt: -1, _id: -1 });
+      await this.collection.createIndex({ evaluatedBy: 1, symbol: 1, publishedAt: -1 });
       await this.quoteCollection.createIndex({ symbol: 1 });
       await this.priceCollection.createIndex(
         { symbol: 1, interval: 1, timestamp: 1 }, { unique: true }
@@ -174,7 +179,7 @@ export class PredictionStorageService {
   public async getCachedPrediction(id: number): Promise<StoredArticle | null> {
     return traceSpan('mongo.get_cached_prediction', 'db.cache', { id }, async () => {
       if (this.collection) {
-        return await this.collection.findOne({ _id: id });
+        return await this.collection.findOne({ _id: id }, { projection: { audioBase64: 0 } });
       }
       return this.memoryStore.get(id) || null;
     });
@@ -284,7 +289,9 @@ export class PredictionStorageService {
   public async getPriceCandles(symbol: string, interval: PriceInterval, from = 0, to = Date.now()): Promise<PricePoint[]> {
     const sym = symbol.toUpperCase();
     const docs = this.priceCollection
-      ? await this.priceCollection.find({ symbol: sym, interval, timestamp: { $gte: from, $lte: to } }).sort({ timestamp: 1 }).toArray()
+      ? await this.priceCollection.find({ symbol: sym, interval, timestamp: { $gte: from, $lte: to } }, {
+        projection: { _id: 0, symbol: 0, interval: 0, provider: 0, fetchedAt: 0 },
+      }).sort({ timestamp: 1 }).toArray()
       : (this.priceMemoryStore.get(`${sym}:${interval}`) ?? []).filter(c => c.timestamp >= from && c.timestamp <= to);
     return docs.map(({ _id, symbol: storedSymbol, interval: storedInterval, provider, fetchedAt, ...c }) => c);
   }
@@ -344,14 +351,15 @@ export class PredictionStorageService {
   /**
    * Retrieve all cached quotes for watchlists.
    */
-  public async getAllQuotes(): Promise<Record<string, StockQuote>> {
+  public async getAllQuotes(watchlist?: string[]): Promise<Record<string, StockQuote>> {
+    const symbols = watchlist?.map(s => s.toUpperCase());
     const map: Record<string, StockQuote> = {};
     for (const [sym, q] of this.quotesMemoryStore.entries()) {
-      map[sym] = q;
+      if (!symbols || symbols.includes(sym)) map[sym] = q;
     }
     if (this.quoteCollection) {
       try {
-        const docs = await this.quoteCollection.find({}).toArray();
+        const docs = await this.quoteCollection.find(symbols ? { _id: { $in: symbols } } : {}).toArray();
         for (const d of docs) {
           map[d.symbol.toUpperCase()] = d;
         }
@@ -504,7 +512,7 @@ export class PredictionStorageService {
             : { publishedAt: -1, createdAt: -1, _id: -1 };
 
       return await this.collection
-        .find(query)
+        .find(query, { projection: { audioBase64: 0 } })
         .sort(sortQuery)
         .skip(offset)
         .limit(limit)
@@ -559,19 +567,15 @@ export class PredictionStorageService {
         || new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime() || b._id - a._id);
     }
 
-    return limit === 0 ? items.slice(offset) : items.slice(offset, offset + limit);
+    return (limit === 0 ? items.slice(offset) : items.slice(offset, offset + limit))
+      .map(({ audioBase64, ...article }) => article);
   }
 
   /**
    * Aggregates and ranks watched stocks by bullish ratio and news volume.
    */
   public async getTopStocks(watchlist: string[]): Promise<StockAggregate[]> {
-    const allArticles = this.collection
-      ? await this.collection.find(
-        watchlist.length ? { symbol: { $in: watchlist.map(s => s.toUpperCase()) } } : {},
-        { projection: { symbol: 1, sentiment: 1, confidence: 1, label: 1, headline: 1, publishedAt: 1 } }
-      ).toArray()
-      : Array.from(this.memoryStore.values());
+    const allArticles = this.collection ? [] : Array.from(this.memoryStore.values());
 
     const map = new Map<string, {
       total: number;
@@ -599,8 +603,27 @@ export class PredictionStorageService {
         lastSignal: 1,
         lastLabel: 'BULLISH',
         lastHeadline: 'Awaiting breaking news...',
-        lastUpdated: new Date().toISOString(),
+        lastUpdated: '',
       });
+    }
+
+    if (this.collection) {
+      const stats = await this.collection.aggregate<{
+        _id: string; total: number; bullish: number; bearish: number; confidenceSum: number;
+        lastSignal: 1 | 0; lastLabel: 'BULLISH' | 'BEARISH'; lastHeadline: string; lastUpdated: string;
+      }>([
+        { $match: watchlist.length ? { symbol: { $in: [...allowedSet!] } } : {} },
+        { $sort: { publishedAt: -1, _id: -1 } },
+        { $group: {
+          _id: '$symbol', total: { $sum: 1 },
+          bullish: { $sum: { $cond: [{ $eq: ['$sentiment', 1] }, 1, 0] } },
+          bearish: { $sum: { $cond: [{ $eq: ['$sentiment', 1] }, 0, 1] } },
+          confidenceSum: { $sum: '$confidence' },
+          lastSignal: { $first: '$sentiment' }, lastLabel: { $first: '$label' },
+          lastHeadline: { $first: '$headline' }, lastUpdated: { $first: '$publishedAt' },
+        } },
+      ]).toArray();
+      for (const { _id, ...entry } of stats) map.set(_id.toUpperCase(), entry);
     }
 
     // Populate stats
@@ -628,7 +651,7 @@ export class PredictionStorageService {
       else entry.bearish++;
       entry.confidenceSum += art.confidence;
 
-      if (new Date(art.publishedAt).getTime() > new Date(entry.lastUpdated).getTime()) {
+      if (!entry.lastUpdated || art.publishedAt > entry.lastUpdated) {
         entry.lastSignal = art.sentiment;
         entry.lastLabel = art.label;
         entry.lastHeadline = art.headline;
@@ -636,7 +659,7 @@ export class PredictionStorageService {
       }
     }
 
-    const quotes = await this.getAllQuotes();
+    const quotes = await this.getAllQuotes([...map.keys()]);
     const result: StockAggregate[] = [];
     for (const [symbol, stats] of map.entries()) {
       const bullishRatio = stats.total > 0 ? stats.bullish / stats.total : 0.5;
@@ -719,7 +742,9 @@ export class PredictionStorageService {
    * Retrieves a cached ElevenLabs MP3 audio buffer from MongoDB.
    */
   public async getAudio(id: number): Promise<Buffer | null> {
-    const doc = await this.getCachedPrediction(id);
+    const doc = this.collection
+      ? await this.collection.findOne({ _id: id }, { projection: { audioBase64: 1 } })
+      : this.memoryStore.get(id);
     if (doc?.audioBase64) {
       return Buffer.from(doc.audioBase64, 'base64');
     }

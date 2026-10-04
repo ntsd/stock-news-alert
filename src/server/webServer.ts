@@ -39,6 +39,32 @@ function loadLightweightChartsScript(): string | null {
 export function createWebServer(options: WebServerOptions): http.Server {
   const { port, watchlist, poller, storage, elevenlabsService, finnhubClient } = options;
   const priceHistory = options.priceHistoryService ?? (finnhubClient ? new PriceHistoryService(storage, finnhubClient) : null);
+  const homepageCache = new Map<string, { value?: unknown; expiresAt: number; pending?: Promise<unknown> }>();
+  async function cachedHomepage<T>(key: string, load: () => Promise<T>): Promise<T> {
+    let entry = homepageCache.get(key);
+    if (!entry) {
+      // ponytail: bounded per-process cache; use a shared cache for multiple replicas.
+      if (homepageCache.size >= 100) homepageCache.delete(homepageCache.keys().next().value!);
+      entry = { expiresAt: 0 };
+      homepageCache.set(key, entry);
+    }
+    const current = entry;
+    if (!current.pending && (current.value === undefined || Date.now() >= current.expiresAt)) {
+      current.pending = load().then(value => {
+        current.value = value;
+        current.expiresAt = Date.now() + 30000;
+        return value;
+      }).catch(error => {
+        current.expiresAt = Date.now() + 5000;
+        if (current.value === undefined) homepageCache.delete(key);
+        throw error;
+      }).finally(() => { current.pending = undefined; });
+      if (current.value !== undefined) {
+        void current.pending.catch(error => console.warn('[Web] Homepage refresh failed; retaining cached data:', error instanceof Error ? error.message : error));
+      }
+    }
+    return (current.value ?? await current.pending) as T;
+  }
 
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
@@ -128,9 +154,26 @@ export function createWebServer(options: WebServerOptions): http.Server {
         const targetList = symbolsParam
           ? symbolsParam.split(',').map((s) => s.trim().toUpperCase()).filter((s) => s.length > 0)
           : watchlist;
-        const stocks = await storage.getTopStocks(targetList);
+        const allStocks = await cachedHomepage('stocks', () => storage.getTopStocks(watchlist));
+        const stocks = allStocks.filter(stock => targetList.includes(stock.symbol));
         res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache' });
         res.end(JSON.stringify({ stocks }));
+        return;
+      }
+
+      // Seven-day per-symbol snapshots: homepage controls filter these in the browser.
+      if (url.pathname === '/api/home-news') {
+        const symbol = url.searchParams.get('symbol')?.toUpperCase();
+        if (!symbol || !watchlist.includes(symbol)) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'symbol must be on the watchlist' }));
+          return;
+        }
+        const news = await cachedHomepage('home-news:' + symbol + ':' + today, () => storage.getRecentNews({
+          symbol, fromDate: earliest, toDate: today, limit: 0, sortBy: 'date',
+        }));
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache' });
+        res.end(JSON.stringify({ news }));
         return;
       }
 
@@ -140,15 +183,21 @@ export function createWebServer(options: WebServerOptions): http.Server {
         const symbols = symbolsParam
           ? symbolsParam.split(',').map((s) => s.trim().toUpperCase()).filter((s) => s.length > 0)
           : watchlist;
-        const limit = Number.parseInt(url.searchParams.get('limit') || '4', 10);
+        const limit = Number(url.searchParams.get('limit') ?? '4');
+        if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'limit must be an integer between 1 and 200' }));
+          return;
+        }
 
-        const topNews = await storage.getRecentNews({
+        const query = {
           limit,
           symbols,
           fromDate,
           toDate,
-          sortBy: 'impact',
-        });
+          sortBy: 'impact' as const,
+        };
+        const topNews = await cachedHomepage('top-news:' + JSON.stringify(query), () => storage.getRecentNews(query));
         res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache' });
         res.end(JSON.stringify({ topNews }));
         return;
@@ -176,7 +225,7 @@ export function createWebServer(options: WebServerOptions): http.Server {
           return;
         }
 
-        const news = await storage.getRecentNews({
+        const query = {
           limit: limit + 1,
           offset,
           symbol,
@@ -187,7 +236,8 @@ export function createWebServer(options: WebServerOptions): http.Server {
           fromDate,
           toDate,
           sortBy,
-        });
+        };
+        const news = await cachedHomepage('news:' + JSON.stringify(query), () => storage.getRecentNews(query));
         res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache' });
         res.end(JSON.stringify({ news: news.slice(0, limit), hasMore: news.length > limit, offset, limit }));
         return;
@@ -2145,15 +2195,21 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
     }
 
     // Top Stocks
+    let topStocksRequest = 0;
+    let topStocksPendingUrl = '';
     async function fetchTopStocks() {
+      let url = '/api/stocks';
+      if (filterStocksOnlyInterest && interestSymbols.length > 0) {
+        url += '?symbols=' + encodeURIComponent(interestSymbols.join(','));
+      }
+      if (topStocksPendingUrl === url) return;
+      const request = ++topStocksRequest;
+      topStocksPendingUrl = url;
       try {
-        let url = '/api/stocks';
-        if (filterStocksOnlyInterest && interestSymbols.length > 0) {
-          url += '?symbols=' + encodeURIComponent(interestSymbols.join(','));
-        }
-        const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
+        const res = await fetch(url, { signal: AbortSignal.timeout(30000) });
         if (!res.ok) throw new Error('Watchlist telemetry request failed: ' + res.status);
         const data = await res.json();
+        if (request !== topStocksRequest) return;
         const grid = document.getElementById('stocksGrid');
         if (!data.stocks || data.stocks.length === 0) {
           grid.innerHTML = '<div class="empty-state" style="grid-column: 1/-1;">No stocks match your active interest symbols.</div>';
@@ -2213,21 +2269,65 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
         }).join('');
       } catch (err) {
         console.error('Error fetching top stocks:', err);
-        document.getElementById('stocksGrid').innerHTML = '<div class="empty-state" style="grid-column: 1/-1;">Watchlist telemetry is temporarily unavailable. Retrying automatically.</div>';
+        if (request !== topStocksRequest) return;
+        const grid = document.getElementById('stocksGrid');
+        if (!grid.querySelector('.stock-symbol')) {
+          grid.innerHTML = '<div class="empty-state" style="grid-column: 1/-1;">Watchlist telemetry is temporarily unavailable. Retrying automatically.</div>';
+        }
+      } finally {
+        if (request === topStocksRequest) topStocksPendingUrl = '';
       }
     }
 
+    // Cached snapshots are independent of dates, signals, sorting, and pagination.
+    const homeNewsCache = new Map();
+    async function loadHomeNews(symbols, refresh = false) {
+      const today = new Date().toISOString().slice(0, 10);
+      const batches = await Promise.all(symbols.map(async symbol => {
+        let entry = homeNewsCache.get(symbol);
+        if (!entry || entry.day !== today) {
+          entry = { day: today, expiresAt: 0, news: null, pending: null };
+          homeNewsCache.set(symbol, entry);
+        }
+        if (!entry.pending && (!entry.news || refresh) && Date.now() >= entry.expiresAt) {
+          entry.pending = fetch('/api/home-news?symbol=' + encodeURIComponent(symbol), { signal: AbortSignal.timeout(30000) })
+            .then(async res => {
+              if (!res.ok) throw new Error('Homepage news request failed: ' + res.status);
+              entry.news = (await res.json()).news;
+              entry.expiresAt = Date.now() + 30000;
+            }).catch(error => {
+              entry.expiresAt = Date.now() + 5000;
+              if (!entry.news) throw error;
+              console.warn('Using cached homepage news:', error);
+            }).finally(() => { entry.pending = null; });
+        }
+        if (entry.pending && (!entry.news || refresh)) await entry.pending;
+        if (!entry.news) throw new Error('Homepage news is temporarily unavailable');
+        return entry.news;
+      }));
+      return [...new Map(batches.flat().map(n => [n._id, n])).values()];
+    }
+
+    function filterHomeNews(news, sortBy) {
+      const dates = getDateParams();
+      const from = dates.fromDate + 'T00:00:00.000Z';
+      const to = dates.toDate + 'T23:59:59.999Z';
+      return news.filter(n => n.publishedAt >= from && n.publishedAt <= to).sort((a, b) => {
+        if (sortBy === 'impact' && a.urgencyScore !== b.urgencyScore) return (b.urgencyScore || 0) - (a.urgencyScore || 0);
+        if ((sortBy === 'impact' || sortBy === 'confidence') && a.confidence !== b.confidence) return b.confidence - a.confidence;
+        return b.publishedAt.localeCompare(a.publishedAt)
+          || (sortBy === 'date' ? (b.createdAt || '').localeCompare(a.createdAt || '') : 0) || b._id - a._id;
+      });
+    }
+
     // Top News on Interest Symbols
-    async function fetchTopNews() {
+    let topNewsRequest = 0;
+    async function fetchTopNews(refresh = false) {
+      const request = ++topNewsRequest;
       try {
         const targetSymbols = interestSymbols.length > 0 ? interestSymbols : ALL_SYMBOLS;
-        const dateParams = getDateParams();
-        let url = '/api/top-news?limit=4&symbols=' + encodeURIComponent(targetSymbols.join(','));
-        if (dateParams.fromDate) url += '&fromDate=' + encodeURIComponent(dateParams.fromDate);
-        if (dateParams.toDate) url += '&toDate=' + encodeURIComponent(dateParams.toDate);
-
-        const res = await fetch(url);
-        const data = await res.json();
+        const data = { topNews: filterHomeNews(await loadHomeNews(targetSymbols, refresh), 'impact').slice(0, 4) };
+        if (request !== topNewsRequest) return;
         const grid = document.getElementById('topNewsGrid');
 
         if (!data.topNews || data.topNews.length === 0) {
@@ -2296,7 +2396,7 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
       }
     }
 
-    // News Feed: server-side pagination covers the whole history, not just a cached subset.
+    // News Feed: browser pagination over the complete cached seven-day window.
     const NEWS_PAGE_SIZE = 10;
     let newsPage = 0;
     let newsRequest = 0;
@@ -2306,39 +2406,20 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
       document.getElementById('newsList').scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
 
-    async function fetchNews(page = 0) {
+    async function fetchNews(page = 0, refresh = false) {
       newsPage = page;
       const request = ++newsRequest;
       try {
-        const dateParams = getDateParams();
-        let url = '/api/news?limit=' + NEWS_PAGE_SIZE + '&offset=' + page * NEWS_PAGE_SIZE;
-
-        // Filter symbols
-        if (singleSymbolFilter) {
-          url += '&symbol=' + encodeURIComponent(singleSymbolFilter);
-        } else if (interestSymbols.length > 0 && interestSymbols.length < ALL_SYMBOLS.length) {
-          url += '&symbols=' + encodeURIComponent(interestSymbols.join(','));
-        }
-
-        // Sort By
-        url += '&sortBy=' + encodeURIComponent(currentSortBy);
-
-        // Date range
-        if (dateParams.fromDate) url += '&fromDate=' + encodeURIComponent(dateParams.fromDate);
-        if (dateParams.toDate) url += '&toDate=' + encodeURIComponent(dateParams.toDate);
-
-        // Sentiment & Priority
-        if (currentSentiment === 'breaking') {
-          url += '&breaking=true';
-        } else if (currentSentiment === 'catalyst') {
-          url += '&priority=NOTABLE_CATALYST';
-        } else if (currentSentiment !== 'all') {
-          url += '&sentiment=' + encodeURIComponent(currentSentiment);
-        }
-
-        const res = await fetch(url);
-        if (!res.ok) throw new Error('News request failed');
-        const data = await res.json();
+        const symbols = singleSymbolFilter ? [singleSymbolFilter] : interestSymbols.length ? interestSymbols : ALL_SYMBOLS;
+        const articles = await loadHomeNews(symbols, refresh);
+        if (request !== newsRequest) return;
+        const filtered = filterHomeNews(articles, currentSortBy).filter(n => {
+          if (currentSentiment === 'breaking') return n.isBreaking;
+          if (currentSentiment === 'catalyst') return n.priority === 'NOTABLE_CATALYST';
+          return currentSentiment === 'all' || n.sentiment === Number(currentSentiment);
+        });
+        const data = { news: filtered.slice(page * NEWS_PAGE_SIZE, (page + 1) * NEWS_PAGE_SIZE),
+          hasMore: filtered.length > (page + 1) * NEWS_PAGE_SIZE };
         if (request !== newsRequest) return;
         // Data may change during live polling; recover if the last page disappeared.
         if (data.news.length === 0 && page > 0) return fetchNews(page - 1);
@@ -3079,8 +3160,8 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
 
     function triggerManualRefresh() {
       fetchTopStocks();
-      fetchTopNews();
-      fetchNews(newsPage);
+      fetchTopNews(true);
+      fetchNews(newsPage, true);
       if (activeSymbol) {
         loadSymbolData(activeSymbol, currentChartRange);
       }
@@ -3110,8 +3191,8 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
     // Auto-refresh poll every 4 seconds
     setInterval(() => {
       fetchTopStocks();
-      fetchTopNews();
-      fetchNews(newsPage);
+      fetchTopNews(true);
+      fetchNews(newsPage, true);
       if (activeSymbol) {
         loadSymbolData(activeSymbol, currentChartRange);
       }
