@@ -137,6 +137,13 @@ The service embeds a dark-mode web application and REST API:
      - Continuous `urgencyScore` ($0.0 - 1.0$) ranks top news across all watchlists.
 7. **Outbound Telegram Throttling with Strict HTML Escaping:**
    - Strict HTML escaping for `&`, `<`, and `>` ensures messages never fail on ticker symbols or financial punctuation (e.g. `AT&T`, `S&P 500`, `P/E > 25`).
+8. **Durable Price History for Future Backtests:**
+    - The poller archives **all daily history available from Yahoo** for each watched symbol, independent of dashboard traffic and `HISTORY_SYNC_DAYS`. It reconciles the full daily series once every 24 hours to catch downtime and provider corrections; this is not a guarantee of complete exchange history.
+    - Dashboard requests also retain provider-supplied **15-minute** (`24H`) and **hourly** (`7D`) candles, plus daily bars for longer ranges. Intraday retention starts with fetched data; unavailable older intraday history cannot be reconstructed from daily bars.
+    - MongoDB `price_candles` holds one OHLCV document per `symbol + interval + timestamp`, with a unique compound index, `provider`, `fetchedAt`, and `adjustedClose` when supplied. Upserts correct overlapping bars without deleting older history. Prices retain provider precision. There is no Mongo expiry/TTL on archived candles.
+    - `price_history_metadata` records the last successful fetch and its returned bounds. Shared in-memory caching holds at most 100 windows, expires chart windows after five minutes, and coalesces concurrent requests. Refresh failures retry after one minute and serve labeled stale candles when available; synthetic quote-based history is never generated or stored.
+    - With MongoDB unavailable/unconfigured, fallback memory retains at most 100 series with 20,000 bars each and is **not durable**. Configure `MONGODB_URI` to build the archive across restarts.
+    - These are the provider's **latest revised candles**, not point-in-time versions. Future backtests must account for corporate actions, survivorship/look-ahead bias, provider coverage and licensing; a timestamped fetch does not prove what data was available historically. A backtest engine is not included.
 
 ---
 

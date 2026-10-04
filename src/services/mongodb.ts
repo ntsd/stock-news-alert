@@ -1,5 +1,6 @@
 import { MongoClient, type Collection, type Db } from 'mongodb';
-import type { FinnhubNewsArticle, StockQuote } from '../types/finnhub.js';
+import type { FinnhubNewsArticle, StockQuote, PricePoint, PriceInterval } from '../types/finnhub.js';
+export type { PriceInterval } from '../types/finnhub.js';
 import type { JevSentimentResult } from '../types/jev.js';
 import { traceSpan } from '../instrumentation/sentry.js';
 
@@ -51,6 +52,31 @@ export interface SyncMetadata {
   syncedTo?: string;
 }
 
+export interface PriceHistoryMetadata {
+  _id: string;
+  symbol: string;
+  range: string;
+  interval: PriceInterval;
+  fetchedAt: number;
+  from: number;
+  to: number;
+}
+export interface StoredPriceCandle extends PricePoint {
+  _id: string;
+  symbol: string;
+  interval: PriceInterval;
+  provider: 'yahoo';
+  fetchedAt: number;
+}
+
+export function validatePriceCandles(candles: PricePoint[]): void {
+  if (candles.some(c => !Number.isSafeInteger(c.timestamp) || c.timestamp <= 0
+    || !Number.isFinite(c.price) || c.price <= 0
+    || [c.open, c.high, c.low, c.close, c.volume, c.adjustedClose].some(v => v !== undefined && !Number.isFinite(v)))) {
+    throw new TypeError('Invalid price candle');
+  }
+}
+
 export interface StockAggregate {
   symbol: string;
   totalArticles: number;
@@ -79,6 +105,10 @@ export class PredictionStorageService {
   private collection: Collection<StoredArticle> | null = null;
   private syncCollection: Collection<SyncMetadata> | null = null;
   private quoteCollection: Collection<StockQuote & { _id: string }> | null = null;
+  private priceCollection: Collection<StoredPriceCandle> | null = null;
+  private priceMetadataCollection: Collection<PriceHistoryMetadata> | null = null;
+  private readonly priceMemoryStore = new Map<string, StoredPriceCandle[]>();
+  private readonly priceMetadataMemoryStore = new Map<string, PriceHistoryMetadata>();
   private readonly memoryStore = new Map<number, StoredArticle>();
   private readonly syncMemoryStore = new Map<string, SyncMetadata>();
   private readonly quotesMemoryStore = new Map<string, StockQuote>();
@@ -105,6 +135,8 @@ export class PredictionStorageService {
       this.collection = this.db.collection<StoredArticle>('predictions');
       this.syncCollection = this.db.collection<SyncMetadata>('sync_metadata');
       this.quoteCollection = this.db.collection<StockQuote & { _id: string }>('stock_quotes');
+      this.priceCollection = this.db.collection<StoredPriceCandle>('price_candles');
+      this.priceMetadataCollection = this.db.collection<PriceHistoryMetadata>('price_history_metadata');
 
       // Create indexes for efficient querying and aggregation
       await this.collection.createIndex({ symbol: 1, publishedAt: -1 });
@@ -114,6 +146,9 @@ export class PredictionStorageService {
       await this.collection.createIndex({ urgencyScore: -1 });
       await this.collection.createIndex({ priority: 1 });
       await this.quoteCollection.createIndex({ symbol: 1 });
+      await this.priceCollection.createIndex(
+        { symbol: 1, interval: 1, timestamp: 1 }, { unique: true }
+      );
 
       console.log('✅ [MongoDB] Connected to centralized MongoDB cluster.');
     } catch (err) {
@@ -122,6 +157,8 @@ export class PredictionStorageService {
       this.collection = null;
       this.syncCollection = null;
       this.quoteCollection = null;
+      this.priceCollection = null;
+      this.priceMetadataCollection = null;
     }
   }
 
@@ -208,9 +245,57 @@ export class PredictionStorageService {
     });
   }
 
-  /**
-   * Save a real-time stock price quote in MongoDB and memory cache.
-   */
+  /** Upsert genuine candles without deleting older history. */
+  public async savePriceCandles(symbol: string, interval: PriceInterval, candles: PricePoint[], fetchedAt = Date.now()): Promise<void> {
+    const sym = symbol.toUpperCase();
+    validatePriceCandles(candles);
+    const docs = [...new Map(candles.map(c => [c.timestamp, {
+      ...c, _id: `${sym}:${interval}:${c.timestamp}`, symbol: sym, interval,
+      provider: 'yahoo' as const, fetchedAt,
+    }])).values()];
+    if (docs.length === 0) return;
+    if (this.priceCollection) {
+      await this.priceCollection.bulkWrite(docs.map(doc => ({ updateOne: {
+        filter: { _id: doc._id }, update: { $set: doc }, upsert: true,
+      } })), { ordered: false });
+      return;
+    }
+    const key = `${sym}:${interval}`;
+    const merged = new Map((this.priceMemoryStore.get(key) ?? []).map(c => [c.timestamp, c]));
+    for (const doc of docs) merged.set(doc.timestamp, doc);
+    // ponytail: memory-only mode is not an archive: keep 100 series / 20k bars each.
+    // Configure MongoDB for durable, uncapped history.
+    this.priceMemoryStore.delete(key);
+    this.priceMemoryStore.set(key, [...merged.values()].sort((a, b) => a.timestamp - b.timestamp).slice(-20000));
+    if (this.priceMemoryStore.size > 100) this.priceMemoryStore.delete(this.priceMemoryStore.keys().next().value!);
+  }
+
+  public async getPriceCandles(symbol: string, interval: PriceInterval, from = 0, to = Date.now()): Promise<PricePoint[]> {
+    const sym = symbol.toUpperCase();
+    const docs = this.priceCollection
+      ? await this.priceCollection.find({ symbol: sym, interval, timestamp: { $gte: from, $lte: to } }).sort({ timestamp: 1 }).toArray()
+      : (this.priceMemoryStore.get(`${sym}:${interval}`) ?? []).filter(c => c.timestamp >= from && c.timestamp <= to);
+    return docs.map(({ _id, symbol: storedSymbol, interval: storedInterval, provider, fetchedAt, ...c }) => c);
+  }
+
+  public async getPriceHistoryMetadata(symbol: string, range: string): Promise<PriceHistoryMetadata | null> {
+    const key = `${symbol.toUpperCase()}:${range}`;
+    return this.priceMetadataCollection
+      ? this.priceMetadataCollection.findOne({ _id: key })
+      : this.priceMetadataMemoryStore.get(key) ?? null;
+  }
+
+  public async savePriceHistoryMetadata(metadata: PriceHistoryMetadata): Promise<void> {
+    if (this.priceMetadataCollection) {
+      await this.priceMetadataCollection.updateOne({ _id: metadata._id }, { $set: metadata }, { upsert: true });
+      return;
+    }
+    this.priceMetadataMemoryStore.delete(metadata._id);
+    this.priceMetadataMemoryStore.set(metadata._id, metadata);
+    if (this.priceMetadataMemoryStore.size > 100) this.priceMetadataMemoryStore.delete(this.priceMetadataMemoryStore.keys().next().value!);
+  }
+
+  /** Save a real-time quote in MongoDB and memory. */
   public async saveQuote(quote: StockQuote): Promise<void> {
     const sym = quote.symbol.toUpperCase();
     const price = quote.price ?? quote.current;

@@ -37,9 +37,15 @@ export interface StockQuote {
 export interface PricePoint {
   timestamp: number; // Unix timestamp in ms
   price: number;
+  adjustedClose?: number; // Provider's split/dividend-adjusted close, when available.
   open?: number;
   high?: number;
   low?: number;
   close?: number;
   volume?: number;
 }
+
+export const PRICE_HISTORY_INTERVALS = {
+  '24h': '15m', '1d': '15m', '7d': '1h', '30d': '1d', '90d': '1d', '1y': '1d', 'max': '1d',
+} as const;
+export type PriceInterval = (typeof PRICE_HISTORY_INTERVALS)[keyof typeof PRICE_HISTORY_INTERVALS];

@@ -1,4 +1,5 @@
 import type { FinnhubNewsArticle, FinnhubQuote, StockQuote, PricePoint } from '../types/finnhub.js';
+import { PRICE_HISTORY_INTERVALS } from '../types/finnhub.js';
 import { withExponentialBackoff } from '../utils/retry.js';
 
 export class FinnhubClient {
@@ -147,14 +148,18 @@ export class FinnhubClient {
 
   /**
    * Fetch historical price points (candles) for chart visualization.
-   * Leverages high-resolution market data with fallback to quote baselines.
+  * Returns genuine Yahoo candles only; failures never manufacture price history.
    */
   public async fetchPriceHistory(symbol: string, range = '7d'): Promise<PricePoint[]> {
     const sym = symbol.toUpperCase();
     try {
-      const interval = range === '24h' || range === '1d' ? '15m' : range === '30d' ? '1d' : range === '90d' || range === '1y' ? '1d' : '1h';
-      const yahooRange = range === '24h' ? '1d' : range === '90d' ? '3mo' : range === '1y' ? '1y' : range;
-      const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?range=${encodeURIComponent(yahooRange)}&interval=${interval}`;
+      const interval = PRICE_HISTORY_INTERVALS[range as keyof typeof PRICE_HISTORY_INTERVALS];
+      if (!interval) throw new TypeError('Unsupported price history range');
+      const yahooRange = ({ '24h': '1d', '30d': '1mo', '90d': '3mo' } as Record<string, string>)[range] ?? range;
+      const period = range === 'max'
+        ? `period1=0&period2=${Math.floor(Date.now() / 1000)}`
+        : `range=${encodeURIComponent(yahooRange)}`;
+      const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?${period}&interval=${interval}`;
 
       const response = await fetch(url, {
         method: 'GET',
@@ -168,6 +173,9 @@ export class FinnhubClient {
       if (response.ok) {
         const json = (await response.json()) as any;
         const result = json?.chart?.result?.[0];
+        if (result?.meta?.dataGranularity && result.meta.dataGranularity !== interval) {
+          throw new Error(`Unexpected candle interval: ${result.meta.dataGranularity}`);
+        }
         if (result && Array.isArray(result.timestamp) && result.indicators?.quote?.[0]) {
           const quotes = result.indicators.quote[0];
           const points: PricePoint[] = [];
@@ -179,16 +187,18 @@ export class FinnhubClient {
             const high = quotes.high?.[i];
             const low = quotes.low?.[i];
             const volume = quotes.volume?.[i];
+            const adjustedClose = result.indicators.adjclose?.[0]?.adjclose?.[i];
 
-            if (typeof close === 'number' && !Number.isNaN(close)) {
+            if (Number.isSafeInteger(t) && t > 0 && typeof close === 'number' && Number.isFinite(close) && close > 0) {
               points.push({
                 timestamp: t,
-                price: Number(close.toFixed(2)),
-                open: typeof open === 'number' ? Number(open.toFixed(2)) : undefined,
-                high: typeof high === 'number' ? Number(high.toFixed(2)) : undefined,
-                low: typeof low === 'number' ? Number(low.toFixed(2)) : undefined,
-                close: Number(close.toFixed(2)),
-                volume: typeof volume === 'number' ? volume : undefined,
+                price: close,
+                open: typeof open === 'number' && Number.isFinite(open) ? open : undefined,
+                high: typeof high === 'number' && Number.isFinite(high) ? high : undefined,
+                low: typeof low === 'number' && Number.isFinite(low) ? low : undefined,
+                close,
+                volume: typeof volume === 'number' && Number.isFinite(volume) ? volume : undefined,
+                adjustedClose: typeof adjustedClose === 'number' && Number.isFinite(adjustedClose) ? adjustedClose : undefined,
               });
             }
           }
@@ -202,29 +212,6 @@ export class FinnhubClient {
       console.warn(`[Finnhub/Chart] Failed to fetch external candles for ${sym}:`, err instanceof Error ? err.message : err);
     }
 
-    // Fallback: Generate continuous trend points from Finnhub quote if available
-    const quote = await this.fetchQuote(sym);
-    if (!quote) return [];
-
-    const now = Date.now();
-    const points: PricePoint[] = [];
-    const count = 30;
-    const intervalMs = (7 * 24 * 3600 * 1000) / count;
-    const startPrice = quote.previousClose || quote.open || quote.current;
-    const endPrice = quote.current;
-
-    for (let i = 0; i <= count; i++) {
-      const progress = i / count;
-      // Slight smooth curve between previous close and current price
-      const price = startPrice + (endPrice - startPrice) * progress;
-      points.push({
-        timestamp: now - (count - i) * intervalMs,
-        price: Number(price.toFixed(2)),
-        open: Number(price.toFixed(2)),
-        close: Number(price.toFixed(2)),
-      });
-    }
-
-    return points;
+    return [];
   }
 }

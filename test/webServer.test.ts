@@ -142,9 +142,9 @@ describe('Web Server & API Endpoints', () => {
         timestamp: Date.now(),
       }),
       fetchPriceHistory: async (symbol: string, range: string) => [
-        { timestamp: Date.now() - 7200000, open: 120, high: 122, low: 119, close: 121, volume: 1000 },
-        { timestamp: Date.now() - 3600000, open: 121, high: 125, low: 120, close: 124, volume: 2000 },
-        { timestamp: Date.now(), open: 124, high: 128, low: 123, close: 125.5, volume: 1500 },
+        { timestamp: Date.now() - 7200000, price: 121, open: 120, high: 122, low: 119, close: 121, volume: 1000 },
+        { timestamp: Date.now() - 3600000, price: 124, open: 121, high: 125, low: 120, close: 124, volume: 2000 },
+        { timestamp: Date.now(), price: 125.5, open: 124, high: 128, low: 123, close: 125.5, volume: 1500 },
       ],
     };
 
@@ -342,6 +342,15 @@ describe('Web Server & API Endpoints', () => {
     assert.ok(Array.isArray(res.data.news));
     assert.ok(res.data.news.length >= 1);
     assert.equal(res.data.news[0].symbol, 'NVDA');
+    assert.equal(res.data.priceHistory.stale, false);
+    assert.ok(res.data.priceHistory.fetchedAt);
+    assert.equal((await storage.getPriceCandles('NVDA', '1h')).length, 3);
+  });
+
+  it('rejects unsupported chart ranges and invalid symbols', async () => {
+    assert.equal((await get('/api/chart/NVDA?range=max')).status, 400);
+    assert.equal((await get('/api/chart/NVDA?range=invalid')).status, 400);
+    assert.equal((await get('/api/chart/NVDA%2Fbad')).status, 400);
   });
 
   it('should render dedicated symbol page at /symbol/:symbol', async () => {

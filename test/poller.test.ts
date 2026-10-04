@@ -88,6 +88,18 @@ describe('NewsAlertPoller scheduling', () => {
 });
 
 describe('NewsAlertPoller sync coverage', () => {
+  it('archives watched daily prices without dashboard traffic and still processes news if prices fail', async (t) => {
+    const s = setup(t);
+    const calls: string[] = [];
+    Object.assign(s.poller, { priceHistoryService: { async get(symbol: string, range: string) {
+      calls.push(`${symbol}:${range}`);
+      throw new Error('Price provider unavailable');
+    } } });
+    await s.tick();
+    assert.deepEqual(calls, ['AAPL:max']);
+    assert.equal(s.fetchNews.mock.callCount(), 1);
+    assert.ok(await s.storage.getSyncMetadata('AAPL'));
+  });
   it('backfills only missing older history after changing 3 days to 365 on restart', async (t) => {
     t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-10-05T12:00:00Z') });
     const initial = setup(t, undefined, 3);

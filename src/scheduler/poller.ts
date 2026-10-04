@@ -6,6 +6,7 @@ import type { TelegramAlertService } from '../services/telegram.js';
 import type { BoundedTtlLruCache } from '../cache/lru.js';
 import type { PredictionStorageService } from '../services/mongodb.js';
 import type { ElevenLabsService } from '../services/elevenlabs.js';
+import type { PriceHistoryService } from '../services/priceHistory.js';
 import { formatNewsAlertHtml } from '../utils/telegramFormat.js';
 import { traceSpan } from '../instrumentation/sentry.js';
 
@@ -22,6 +23,7 @@ export interface PollerOptions {
   deduplicator: BoundedTtlLruCache;
   initialSeededSymbols?: string[];
   historySyncDays?: number;
+  priceHistoryService?: PriceHistoryService;
 }
 
 export interface PollerStats {
@@ -50,6 +52,7 @@ export class NewsAlertPoller {
   private readonly elevenlabsService: ElevenLabsService;
   private readonly deduplicator: BoundedTtlLruCache;
   private readonly historySyncDays: number;
+  private readonly priceHistoryService?: PriceHistoryService;
 
   private isRunning = false;
   private timer: NodeJS.Timeout | null = null;
@@ -79,6 +82,7 @@ export class NewsAlertPoller {
     this.elevenlabsService = options.elevenlabsService;
     this.deduplicator = options.deduplicator;
     this.historySyncDays = options.historySyncDays ?? 365;
+    this.priceHistoryService = options.priceHistoryService;
 
     if (options.initialSeededSymbols) {
       for (const s of options.initialSeededSymbols) {
@@ -189,6 +193,13 @@ export class NewsAlertPoller {
         this.seededSymbols.add(symbol);
       } catch (error) {
         console.error(`❌ [Poller] Error polling news for ${symbol}:`, error instanceof Error ? error.message : error);
+      }
+      // Archive after delivering alerts, even without dashboard traffic or a
+      // successful news sync. Price failures cannot advance news coverage.
+      try {
+        await this.priceHistoryService?.get(symbol, 'max');
+      } catch (error) {
+        console.warn(`[Poller] Price history sync failed for ${symbol}:`, error);
       }
     });
   }

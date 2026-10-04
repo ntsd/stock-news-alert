@@ -6,6 +6,7 @@ import type { NewsAlertPoller } from '../scheduler/poller.js';
 import type { PredictionStorageService } from '../services/mongodb.js';
 import type { ElevenLabsService } from '../services/elevenlabs.js';
 import type { FinnhubClient } from '../services/finnhub.js';
+import { PriceHistoryService } from '../services/priceHistory.js';
 
 export interface WebServerOptions {
   port: number;
@@ -14,6 +15,7 @@ export interface WebServerOptions {
   storage: PredictionStorageService;
   elevenlabsService: ElevenLabsService;
   finnhubClient?: FinnhubClient;
+  priceHistoryService?: PriceHistoryService;
 }
 
 // ponytail: vendored from node_modules at request time (no build step, no new dependency).
@@ -36,6 +38,7 @@ function loadLightweightChartsScript(): string | null {
 
 export function createWebServer(options: WebServerOptions): http.Server {
   const { port, watchlist, poller, storage, elevenlabsService, finnhubClient } = options;
+  const priceHistory = options.priceHistoryService ?? (finnhubClient ? new PriceHistoryService(storage, finnhubClient) : null);
 
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
@@ -265,6 +268,11 @@ export function createWebServer(options: WebServerOptions): http.Server {
       if (url.pathname.startsWith('/api/chart/')) {
         const symbol = url.pathname.replace('/api/chart/', '').trim().toUpperCase();
         const range = url.searchParams.get('range') || '7d';
+        if (!/^[A-Z0-9.^=-]{1,20}$/.test(symbol) || !['24h', '1d', '7d', '30d', '90d', '1y'].includes(range)) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Invalid chart symbol or range' }));
+          return;
+        }
 
         let quote = await storage.getQuote(symbol);
         if (!quote && finnhubClient) {
@@ -274,9 +282,10 @@ export function createWebServer(options: WebServerOptions): http.Server {
           }
         }
 
-        const candles = finnhubClient
-          ? await finnhubClient.fetchPriceHistory(symbol, range)
-          : [];
+        const history = priceHistory
+          ? await priceHistory.get(symbol, range)
+          : { candles: [], stale: true, fetchedAt: null };
+        const candles = history.candles;
 
         // Determine lookback for news articles based on range
         const now = Date.now();
@@ -300,7 +309,9 @@ export function createWebServer(options: WebServerOptions): http.Server {
         });
 
         res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache' });
-        res.end(JSON.stringify({ symbol, quote, candles, news }));
+        res.end(JSON.stringify({ symbol, quote, candles, news, priceHistory: {
+          stale: history.stale, fetchedAt: history.fetchedAt, provider: 'yahoo',
+        } }));
         return;
       }
 
@@ -2432,7 +2443,9 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
         const data = await res.json();
         currentSymbolData = data;
 
-        if (badge) badge.textContent = 'Live • ' + new Date().toLocaleTimeString();
+        if (badge) badge.textContent = !data.candles?.length ? 'Price history unavailable'
+          : (data.priceHistory?.stale ? 'Stale prices • ' : 'Prices as of • ')
+            + new Date(data.priceHistory?.fetchedAt ?? Date.now()).toLocaleString();
 
         renderSymbolHero(data);
         renderPriceChart(data);

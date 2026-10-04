@@ -5,6 +5,7 @@ import { JevClassificationService } from './services/jev.js';
 import { TelegramAlertService } from './services/telegram.js';
 import { ElevenLabsService } from './services/elevenlabs.js';
 import { PredictionStorageService } from './services/mongodb.js';
+import { PriceHistoryService } from './services/priceHistory.js';
 import { BoundedTtlLruCache } from './cache/lru.js';
 import { NewsAlertPoller } from './scheduler/poller.js';
 import { createWebServer } from './server/webServer.js';
@@ -33,6 +34,7 @@ await storage.init();
 
 // 3. Initialize core services & clients
 const finnhubClient = new FinnhubClient(config.finnhubApiKey);
+const priceHistoryService = new PriceHistoryService(storage, finnhubClient);
 const jevService = new JevClassificationService(config.typesafeApiKey);
 const elevenlabsService = new ElevenLabsService(
   config.elevenlabsApiKey,
@@ -72,6 +74,7 @@ const poller = new NewsAlertPoller({
   deduplicator,
   initialSeededSymbols: seededSymbols,
   historySyncDays: config.historySyncDays,
+  priceHistoryService,
 });
 
 // 5. Start Web Dashboard and API server (for Render web service monitoring & UI)
@@ -84,6 +87,7 @@ if (config.enableHealthServer) {
     storage,
     elevenlabsService,
     finnhubClient,
+    priceHistoryService,
   });
 }
 
