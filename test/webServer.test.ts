@@ -256,7 +256,7 @@ describe('Web Server & API Endpoints', () => {
   it('should render dedicated symbol page at /symbol/:symbol', async () => {
     const res = await get('/symbol/NVDA');
     assert.equal(res.status, 200);
-    assert.ok(res.raw.includes('priceNewsCanvas'));
+    assert.ok(res.raw.includes('priceChartContainer'));
     assert.ok(res.raw.includes('symbolNewsList'));
     assert.ok(res.raw.includes('"NVDA"'));
     assert.ok(res.raw.includes('Back to Radar Dashboard'));

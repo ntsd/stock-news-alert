@@ -2270,7 +2270,6 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
     let symbolNewsFilter = 'all';
     let symbolNewsSort = 'date';
     let symbolNewsSearch = '';
-    let renderedDots = [];
 
     function navigateToSymbol(sym, push = true) {
       if (!sym) return;
@@ -2376,265 +2375,192 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
       ratioEl.style.color = bullRatio >= 50 ? '#10B981' : '#F43F5E';
     }
 
+    // Price chart powered by TradingView Lightweight Charts (vendored via /vendor/lightweight-charts.js)
+    let priceChart = null;
+    let priceSeries = null;
+    let chartCandles = [];
+    let newsDots = [];
+
+    function initPriceChart() {
+      if (priceChart || typeof LightweightCharts === 'undefined') return false;
+      const container = document.getElementById('priceChartContainer');
+      if (!container) return false;
+
+      priceChart = LightweightCharts.createChart(container, {
+        layout: {
+          background: { color: 'transparent' },
+          textColor: '#9CA3AF',
+          fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, sans-serif",
+        },
+        grid: {
+          vertLines: { color: 'rgba(255, 255, 255, 0.05)' },
+          horzLines: { color: 'rgba(255, 255, 255, 0.05)' },
+        },
+        rightPriceScale: { borderColor: 'rgba(255, 255, 255, 0.08)' },
+        timeScale: {
+          borderColor: 'rgba(255, 255, 255, 0.08)',
+          time: { format: 'yyyy-MM-dd HH:mm' },
+        },
+        crosshair: {
+          vertLine: { color: 'rgba(99, 102, 241, 0.5)', labelBackgroundColor: '#6366F1' },
+          horzLine: { color: 'rgba(99, 102, 241, 0.5)', labelBackgroundColor: '#6366F1' },
+        },
+      });
+
+      priceSeries = priceChart.addSeries(LightweightCharts.LineSeries, {
+        color: '#6366F1',
+        lineWidth: 2,
+        priceLineVisible: false,
+        lastValueVisible: true,
+        priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
+      });
+
+      // Reposition news dots whenever the visible time range changes (scroll/zoom)
+      priceChart.timeScale().subscribeVisibleTimeRangeChange(() => positionNewsDots());
+
+      new ResizeObserver(() => {
+        priceChart && priceChart.applyOptions({ width: container.clientWidth, height: container.clientHeight });
+        positionNewsDots();
+      }).observe(container);
+
+      return true;
+    }
+
     function renderPriceChart(data) {
-      const canvas = document.getElementById('priceNewsCanvas');
-      if (!canvas) return;
+      const container = document.getElementById('priceChartContainer');
+      const dotLayer = document.getElementById('newsDotLayer');
+      if (!container || !dotLayer) return;
 
-      const wrap = canvas.parentElement;
-      const dpr = window.devicePixelRatio || 1;
-      const rect = wrap.getBoundingClientRect();
-      const width = rect.width;
-      const height = rect.height;
-
-      canvas.width = width * dpr;
-      canvas.height = height * dpr;
-      const ctx = canvas.getContext('2d');
-      ctx.scale(dpr, dpr);
-
-      const candles = (data.candles || []).filter(c => c.close != null && c.timestamp != null);
+      chartCandles = (data.candles || []).filter(c => c.close != null && c.timestamp != null);
       const news = data.news || [];
-      renderedDots = [];
 
-      ctx.clearRect(0, 0, width, height);
-
-      if (candles.length === 0) {
-        ctx.fillStyle = '#64748B';
-        ctx.font = '14px Inter, sans-serif';
-        ctx.textAlign = 'center';
-        ctx.fillText('No historical price candles available for this asset & range.', width / 2, height / 2);
+      // initPriceChart() returns false only when the library is missing or the
+      // container is absent; an already-created chart is a no-op, not an error.
+      if (!priceChart && !initPriceChart()) {
+        dotLayer.innerHTML = '<div class="chart-empty-state">Chart library unavailable — price history not rendered.</div>';
         return;
       }
 
-      const padding = { top: 30, right: 65, bottom: 40, left: 20 };
-      const chartW = width - padding.left - padding.right;
-      const chartH = height - padding.top - padding.bottom;
+      if (chartCandles.length === 0) {
+        priceSeries.setData([]);
+        dotLayer.innerHTML = '<div class="chart-empty-state">No historical price candles available for this asset & range.</div>';
+        return;
+      }
 
-      let minPrice = Infinity;
-      let maxPrice = -Infinity;
-      let minTime = Infinity;
-      let maxTime = -Infinity;
-
-      candles.forEach(c => {
-        if (c.low != null && c.low < minPrice) minPrice = c.low;
-        if (c.close < minPrice) minPrice = c.close;
-        if (c.high != null && c.high > maxPrice) maxPrice = c.high;
-        if (c.close > maxPrice) maxPrice = c.close;
-        if (c.timestamp < minTime) minTime = c.timestamp;
-        if (c.timestamp > maxTime) maxTime = c.timestamp;
+      priceChart.applyOptions({
+        width: container.clientWidth,
+        height: container.clientHeight,
+        timeScale: {
+          time: {
+            format: currentChartRange === '24h' || currentChartRange === '1d'
+              ? 'HH:mm'
+              : 'yyyy-MM-dd',
+          },
+        },
       });
 
-      const priceRange = maxPrice - minPrice || 1;
-      minPrice -= priceRange * 0.05;
-      maxPrice += priceRange * 0.05;
-      const timeRange = maxTime - minTime || 1;
+      priceSeries.setData(chartCandles.map(c => ({
+        time: Math.floor(c.timestamp / 1000),
+        value: c.close,
+      })));
+      priceChart.timeScale().fitContent();
 
-      function getX(timestamp) {
-        return padding.left + ((timestamp - minTime) / timeRange) * chartW;
-      }
-      function getY(price) {
-        return padding.top + (1 - (price - minPrice) / (maxPrice - minPrice)) * chartH;
-      }
-
-      // Draw Gridlines & Price labels on right
-      ctx.lineWidth = 1;
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.06)';
-      ctx.fillStyle = '#64748B';
-      ctx.font = '11px JetBrains Mono, monospace';
-      ctx.textAlign = 'left';
-
-      const gridSteps = 5;
-      for (let i = 0; i <= gridSteps; i++) {
-        const p = minPrice + (i / gridSteps) * (maxPrice - minPrice);
-        const y = getY(p);
-        ctx.beginPath();
-        ctx.moveTo(padding.left, y);
-        ctx.lineTo(width - padding.right, y);
-        ctx.stroke();
-
-        ctx.fillText(\`$\${p.toFixed(2)}\`, width - padding.right + 8, y + 4);
-      }
-
-      // Time axis labels
-      const timeSteps = Math.min(6, candles.length);
-      ctx.textAlign = 'center';
-      for (let i = 0; i < timeSteps; i++) {
-        const idx = Math.floor((i / (timeSteps - 1 || 1)) * (candles.length - 1));
-        const c = candles[idx];
-        const x = getX(c.timestamp);
-        const dateObj = new Date(c.timestamp);
-        const timeLabel = currentChartRange === '24h' || currentChartRange === '1d'
-          ? dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-          : dateObj.toLocaleDateString([], { month: 'short', day: 'numeric' });
-
-        ctx.fillText(timeLabel, x, height - padding.bottom + 20);
-      }
-
-      // Draw Gradient Area under Price Line
-      const grad = ctx.createLinearGradient(0, padding.top, 0, padding.top + chartH);
-      grad.addColorStop(0, 'rgba(99, 102, 241, 0.35)');
-      grad.addColorStop(0.7, 'rgba(99, 102, 241, 0.08)');
-      grad.addColorStop(1, 'rgba(99, 102, 241, 0.00)');
-
-      ctx.beginPath();
-      ctx.moveTo(getX(candles[0].timestamp), getY(candles[0].close));
-      for (let i = 1; i < candles.length; i++) {
-        ctx.lineTo(getX(candles[i].timestamp), getY(candles[i].close));
-      }
-      ctx.lineTo(getX(candles[candles.length - 1].timestamp), padding.top + chartH);
-      ctx.lineTo(getX(candles[0].timestamp), padding.top + chartH);
-      ctx.closePath();
-      ctx.fillStyle = grad;
-      ctx.fill();
-
-      // Draw Main Price Line
-      ctx.beginPath();
-      ctx.moveTo(getX(candles[0].timestamp), getY(candles[0].close));
-      for (let i = 1; i < candles.length; i++) {
-        ctx.lineTo(getX(candles[i].timestamp), getY(candles[i].close));
-      }
-      ctx.lineWidth = 2.5;
-      ctx.strokeStyle = '#6366F1';
-      ctx.shadowColor = 'rgba(99, 102, 241, 0.5)';
-      ctx.shadowBlur = 8;
-      ctx.stroke();
-      ctx.shadowBlur = 0;
-
-      // Find price at given timestamp by interpolating
-      function getPriceAtTime(t) {
-        if (t <= candles[0].timestamp) return candles[0].close;
-        if (t >= candles[candles.length - 1].timestamp) return candles[candles.length - 1].close;
-        for (let i = 0; i < candles.length - 1; i++) {
-          const c1 = candles[i];
-          const c2 = candles[i + 1];
-          if (t >= c1.timestamp && t <= c2.timestamp) {
-            const ratio = (t - c1.timestamp) / (c2.timestamp - c1.timestamp);
-            return c1.close + ratio * (c2.close - c1.close);
-          }
-        }
-        return candles[candles.length - 1].close;
-      }
-
-      // Plot Published News Event Dots on Chart
+      // Build news event dots as positioned HTML overlays
+      newsDots = [];
+      dotLayer.innerHTML = '';
       news.forEach(n => {
-        const t = new Date(n.publishedAt).getTime();
-        if (t < minTime - 3600000 || t > maxTime + 3600000) return;
+        const tMs = new Date(n.publishedAt).getTime();
+        const el = document.createElement('div');
+        el.className = 'news-dot ' + (n.sentiment === 1 ? 'bullish' : 'bearish')
+          + (n.priority === 'BREAKING_CRITICAL' ? ' breaking' : n.priority === 'NOTABLE_CATALYST' ? ' catalyst' : '');
+        el.title = n.headline;
 
-        const x = getX(Math.max(minTime, Math.min(maxTime, t)));
-        const priceAtNews = getPriceAtTime(t);
-        const y = getY(priceAtNews);
+        el.addEventListener('mouseenter', () => showNewsDotTooltip(el, n));
+        el.addEventListener('mouseleave', hideNewsDotTooltip);
+        el.addEventListener('click', () => jumpToNewsArticle(n._id));
 
-        const isBull = n.sentiment === 1;
-        const dotColor = isBull ? '#10B981' : '#F43F5E';
-        const isBreaking = n.priority === 'BREAKING_CRITICAL';
-
-        // Outer glow halo if Breaking Critical or Notable Catalyst
-        if (isBreaking) {
-          ctx.beginPath();
-          ctx.arc(x, y, 13, 0, Math.PI * 2);
-          ctx.fillStyle = 'rgba(239, 68, 68, 0.25)';
-          ctx.fill();
-          ctx.lineWidth = 1.5;
-          ctx.strokeStyle = 'rgba(239, 68, 68, 0.8)';
-          ctx.stroke();
-        } else if (n.priority === 'NOTABLE_CATALYST') {
-          ctx.beginPath();
-          ctx.arc(x, y, 10, 0, Math.PI * 2);
-          ctx.fillStyle = 'rgba(245, 158, 11, 0.20)';
-          ctx.fill();
-        }
-
-        // Main colored circle
-        ctx.beginPath();
-        ctx.arc(x, y, 6.5, 0, Math.PI * 2);
-        ctx.fillStyle = dotColor;
-        ctx.shadowColor = dotColor;
-        ctx.shadowBlur = 6;
-        ctx.fill();
-        ctx.shadowBlur = 0;
-
-        // White inner pip
-        ctx.beginPath();
-        ctx.arc(x, y, 2.2, 0, Math.PI * 2);
-        ctx.fillStyle = '#FFFFFF';
-        ctx.fill();
-
-        renderedDots.push({ x, y, radius: 10, news: n });
+        dotLayer.appendChild(el);
+        newsDots.push({ el, timeSec: Math.floor(tMs / 1000), price: priceAtTime(tMs), news: n });
       });
 
-      // Canvas Interaction Handlers
-      setupCanvasInteractions(canvas, candles, padding, minPrice, maxPrice, minTime, maxTime, chartW, chartH);
+      positionNewsDots();
     }
 
-    function setupCanvasInteractions(canvas, candles, padding, minPrice, maxPrice, minTime, maxTime, chartW, chartH) {
+    // Interpolate the close price at a given timestamp (ms) from the candle series
+    function priceAtTime(t) {
+      if (chartCandles.length === 0) return null;
+      if (t <= chartCandles[0].timestamp) return chartCandles[0].close;
+      if (t >= chartCandles[chartCandles.length - 1].timestamp) return chartCandles[chartCandles.length - 1].close;
+      for (let i = 0; i < chartCandles.length - 1; i++) {
+        const c1 = chartCandles[i];
+        const c2 = chartCandles[i + 1];
+        if (t >= c1.timestamp && t <= c2.timestamp) {
+          const ratio = (t - c1.timestamp) / (c2.timestamp - c1.timestamp);
+          return c1.close + ratio * (c2.close - c1.close);
+        }
+      }
+      return chartCandles[chartCandles.length - 1].close;
+    }
+
+    function positionNewsDots() {
+      if (!priceChart || !priceSeries) return;
+      const timeScale = priceChart.timeScale();
+      const first = chartCandles.length ? chartCandles[0].timestamp / 1000 : 0;
+      const last = chartCandles.length ? chartCandles[chartCandles.length - 1].timestamp / 1000 : 0;
+
+      newsDots.forEach(dot => {
+        // Clamp to the candle window so dots sit on the price line
+        const t = Math.max(first, Math.min(last, dot.timeSec));
+        const x = timeScale.timeToCoordinate(t);
+        const y = dot.price != null ? priceSeries.priceToCoordinate(dot.price) : null;
+        if (x == null || y == null) {
+          dot.el.style.display = 'none';
+          return;
+        }
+        dot.el.style.display = 'block';
+        dot.el.style.left = x + 'px';
+        dot.el.style.top = y + 'px';
+      });
+    }
+
+    function showNewsDotTooltip(el, n) {
       const tooltip = document.getElementById('chartDotTooltip');
+      if (!tooltip) return;
+      const isBull = n.sentiment === 1;
+      const sentColor = isBull ? '#34D399' : '#F87171';
+      const sentLabel = isBull ? '🟢 Bullish Signal' : '🔴 Bearish Signal';
+      const impact = Math.round((n.urgencyScore || 0) * 100);
+      const timeStr = new Date(n.publishedAt).toLocaleString();
 
-      canvas.onmousemove = (e) => {
-        const rect = canvas.getBoundingClientRect();
-        const mouseX = e.clientX - rect.left;
-        const mouseY = e.clientY - rect.top;
+      tooltip.innerHTML = \`
+        <div style="font-weight:700; font-size:11px; margin-bottom:4px; color:\${sentColor}; display:flex; justify-content:space-between;">
+          <span>\${sentLabel}</span>
+          <span style="color:#A5B4FC;">⚡ \${impact}% Impact</span>
+        </div>
+        <div style="font-weight:600; font-size:12px; margin-bottom:6px; color:#FFF; line-height:1.35;">\${n.headline}</div>
+        <div style="font-size:10px; color:#94A3B8; display:flex; justify-content:space-between; align-items:center;">
+          <span>🕒 \${timeStr}</span>
+          <span style="color:#818CF8; font-weight:600;">Click to jump ↓</span>
+        </div>
+      \`;
+      tooltip.style.display = 'block';
+      tooltip.style.left = el.style.left;
+      tooltip.style.top = el.style.top;
+    }
 
-        let hoveredDot = null;
-        for (const dot of renderedDots) {
-          const dist = Math.hypot(dot.x - mouseX, dot.y - mouseY);
-          if (dist <= dot.radius + 3) {
-            hoveredDot = dot;
-            break;
-          }
-        }
+    function hideNewsDotTooltip() {
+      const tooltip = document.getElementById('chartDotTooltip');
+      if (tooltip) tooltip.style.display = 'none';
+    }
 
-        if (hoveredDot) {
-          canvas.style.cursor = 'pointer';
-          tooltip.style.display = 'block';
-          tooltip.style.left = \`\${hoveredDot.x}px\`;
-          tooltip.style.top = \`\${hoveredDot.y}px\`;
-
-          const n = hoveredDot.news;
-          const isBull = n.sentiment === 1;
-          const sentColor = isBull ? '#34D399' : '#F87171';
-          const sentLabel = isBull ? '🟢 Bullish Signal' : '🔴 Bearish Signal';
-          const impact = Math.round((n.urgencyScore || 0) * 100);
-          const timeStr = new Date(n.publishedAt).toLocaleString();
-
-          tooltip.innerHTML = \`
-            <div style="font-weight:700; font-size:11px; margin-bottom:4px; color:\${sentColor}; display:flex; justify-content:space-between;">
-              <span>\${sentLabel}</span>
-              <span style="color:#A5B4FC;">⚡ \${impact}% Impact</span>
-            </div>
-            <div style="font-weight:600; font-size:12px; margin-bottom:6px; color:#FFF; line-height:1.35;">\${n.headline}</div>
-            <div style="font-size:10px; color:#94A3B8; display:flex; justify-content:space-between; align-items:center;">
-              <span>🕒 \${timeStr}</span>
-              <span style="color:#818CF8; font-weight:600;">Click to jump ↓</span>
-            </div>
-          \`;
-        } else {
-          canvas.style.cursor = 'crosshair';
-          tooltip.style.display = 'none';
-        }
-      };
-
-      canvas.onmouseleave = () => {
-        tooltip.style.display = 'none';
-      };
-
-      canvas.onclick = (e) => {
-        const rect = canvas.getBoundingClientRect();
-        const mouseX = e.clientX - rect.left;
-        const mouseY = e.clientY - rect.top;
-
-        for (const dot of renderedDots) {
-          const dist = Math.hypot(dot.x - mouseX, dot.y - mouseY);
-          if (dist <= dot.radius + 4) {
-            const articleEl = document.getElementById('symbol-news-' + dot.news._id);
-            if (articleEl) {
-              articleEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
-              articleEl.classList.remove('card-highlight-flash');
-              void articleEl.offsetWidth;
-              articleEl.classList.add('card-highlight-flash');
-            }
-            break;
-          }
-        }
-      };
+    function jumpToNewsArticle(articleId) {
+      const articleEl = document.getElementById('symbol-news-' + articleId);
+      if (articleEl) {
+        articleEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        articleEl.classList.remove('card-highlight-flash');
+        void articleEl.offsetWidth;
+        articleEl.classList.add('card-highlight-flash');
+      }
     }
 
     function setSymbolNewsFilter(filter, btn) {
