@@ -277,10 +277,12 @@ export function createWebServer(options: WebServerOptions): http.Server {
           range === '24h' || range === '1d'
             ? 24 * 3600 * 1000
             : range === '30d'
-            ? 30 * 24 * 3600 * 1000
-            : range === '90d'
-            ? 90 * 24 * 3600 * 1000
-            : 7 * 24 * 3600 * 1000;
+              ? 30 * 24 * 3600 * 1000
+              : range === '90d'
+                ? 90 * 24 * 3600 * 1000
+                : range === '1y'
+                  ? 365 * 24 * 3600 * 1000
+                  : 7 * 24 * 3600 * 1000;
         const fromDate = new Date(now - rangeMs).toISOString().split('T')[0];
 
         const news = await storage.getRecentNews({
@@ -1550,6 +1552,79 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
       .symbol-hero-card { flex-direction: column; align-items: flex-start; }
       .symbol-hero-right { align-items: flex-start; }
     }
+
+    /* News Pagination */
+    .news-pagination {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 20px 0 8px;
+      flex-wrap: wrap;
+    }
+
+    .page-btn {
+      background: rgba(99, 102, 241, 0.12);
+      border: 1px solid rgba(99, 102, 241, 0.3);
+      color: #A5B4FC;
+      padding: 6px 14px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      font-family: 'Inter', sans-serif;
+    }
+
+    .page-btn:hover:not(:disabled) {
+      background: rgba(99, 102, 241, 0.28);
+      color: #FFF;
+      border-color: #818CF8;
+    }
+
+    .page-btn:disabled {
+      opacity: 0.35;
+      cursor: not-allowed;
+    }
+
+    .page-info {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      color: var(--text-muted);
+      padding: 0 6px;
+    }
+
+    .page-dots {
+      display: flex;
+      gap: 4px;
+      align-items: center;
+    }
+
+    .page-num {
+      background: transparent;
+      border: 1px solid var(--border-color);
+      color: var(--text-muted);
+      width: 30px;
+      height: 30px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.18s;
+      font-family: 'Inter', sans-serif;
+    }
+
+    .page-num:hover {
+      border-color: rgba(99, 102, 241, 0.5);
+      color: #FFF;
+    }
+
+    .page-num.active {
+      background: #6366F1;
+      border-color: #6366F1;
+      color: #FFF;
+      box-shadow: 0 2px 8px rgba(99, 102, 241, 0.45);
+    }
   </style>
   <script src="/vendor/lightweight-charts.js"></script>
 </head>
@@ -1771,9 +1846,9 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
             </div>
             <div class="chart-legend">
               <span class="legend-item"><span class="legend-dot" style="background:#6366F1;"></span> Price Line</span>
-              <span class="legend-item"><span class="legend-dot" style="background:#10B981;"></span> 🟢 Bullish News</span>
-              <span class="legend-item"><span class="legend-dot" style="background:#F43F5E;"></span> 🔴 Bearish News</span>
-              <span class="legend-item"><span class="legend-dot" style="background:#EF4444; box-shadow: 0 0 6px #EF4444;"></span> 🔥 Breaking Halo</span>
+              <span class="legend-item"> 🟢 Bullish News</span>
+              <span class="legend-item"> 🔴 Bearish News</span>
+              <span class="legend-item"> 🔥 Breaking Halo</span>
             </div>
           </div>
           <div class="range-buttons" id="chartRangeButtons">
@@ -1781,6 +1856,32 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
             <button class="range-btn active" data-range="7d" onclick="setChartRange('7d', this)">7D</button>
             <button class="range-btn" data-range="30d" onclick="setChartRange('30d', this)">30D</button>
             <button class="range-btn" data-range="90d" onclick="setChartRange('90d', this)">90D</button>
+            <button class="range-btn" data-range="1y" onclick="setChartRange('1y', this)">1Y</button>
+          </div>
+        </div>
+
+        <!-- Filter Controls above chart canvas (also drive dot visibility) -->
+        <div class="controls-panel" style="margin-bottom: 12px;">
+          <div class="controls-row">
+            <div class="control-group">
+              <span class="control-label">🎯 Filter Dots &amp; News:</span>
+              <div class="pill-buttons" id="symbolNewsFilterPills">
+                <button class="control-btn active" onclick="setSymbolNewsFilter('all', this)">All</button>
+                <button class="control-btn" onclick="setSymbolNewsFilter('breaking', this)">🔥 Breaking</button>
+                <button class="control-btn" onclick="setSymbolNewsFilter('catalyst', this)">⚡ Catalysts</button>
+                <button class="control-btn" onclick="setSymbolNewsFilter('bullish', this)">🟢 Bullish</button>
+                <button class="control-btn" onclick="setSymbolNewsFilter('bearish', this)">🔴 Bearish</button>
+              </div>
+            </div>
+            <div class="control-group">
+              <span class="control-label">⚡ Sort:</span>
+              <select class="select-dropdown" id="symbolNewsSortSelect" onchange="onSymbolNewsSortChange(this.value)">
+                <option value="date">🕒 Latest First</option>
+                <option value="impact">💥 Highest Urgency</option>
+                <option value="confidence">🎯 Highest Confidence</option>
+              </select>
+              <input type="text" class="interest-search" id="symbolNewsSearchInput" placeholder="Search headline..." oninput="onSymbolNewsSearch(this.value)" style="margin-left: 8px;">
+            </div>
           </div>
         </div>
 
@@ -1795,35 +1896,10 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
       <div>
         <div class="section-header" style="margin-top: 16px;">
           <div class="section-title">
-            <span id="symbolNewsHeading">📰 Published News & Catalysts</span>
-            <span class="section-subtitle">(Click any dot on chart above to jump, or filter below)</span>
+            <span id="symbolNewsHeading">📰 Published News &amp; Catalysts</span>
+            <span class="section-subtitle">(Click any dot on chart to jump)</span>
           </div>
           <span class="counter-badge" id="symbolNewsCountBadge">0 Articles</span>
-        </div>
-
-        <div class="controls-panel">
-          <div class="controls-row">
-            <div class="control-group">
-              <span class="control-label">🎯 Filter:</span>
-              <div class="pill-buttons" id="symbolNewsFilterPills">
-                <button class="control-btn active" onclick="setSymbolNewsFilter('all', this)">All News</button>
-                <button class="control-btn" onclick="setSymbolNewsFilter('breaking', this)">🔥 Breaking</button>
-                <button class="control-btn" onclick="setSymbolNewsFilter('catalyst', this)">⚡ Catalysts</button>
-                <button class="control-btn" onclick="setSymbolNewsFilter('bullish', this)">🟢 Bullish</button>
-                <button class="control-btn" onclick="setSymbolNewsFilter('bearish', this)">🔴 Bearish</button>
-              </div>
-            </div>
-
-            <div class="control-group">
-              <span class="control-label">⚡ Sort:</span>
-              <select class="select-dropdown" id="symbolNewsSortSelect" onchange="onSymbolNewsSortChange(this.value)">
-                <option value="date">🕒 Latest First</option>
-                <option value="impact">💥 Highest Urgency / Impact</option>
-                <option value="confidence">🎯 Highest Confidence</option>
-              </select>
-              <input type="text" class="interest-search" id="symbolNewsSearchInput" placeholder="Search headline..." oninput="onSymbolNewsSearch(this.value)" style="margin-left: 8px;">
-            </div>
-          </div>
         </div>
 
         <div class="news-list" id="symbolNewsList">
@@ -2270,6 +2346,8 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
     let symbolNewsFilter = 'all';
     let symbolNewsSort = 'date';
     let symbolNewsSearch = '';
+    const SYMBOL_NEWS_PAGE_SIZE = 10;
+    let symbolNewsPage = 0; // 0-indexed current page
 
     function navigateToSymbol(sym, push = true) {
       if (!sym) return;
@@ -2405,6 +2483,8 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
           vertLine: { color: 'rgba(99, 102, 241, 0.5)', labelBackgroundColor: '#6366F1' },
           horzLine: { color: 'rgba(99, 102, 241, 0.5)', labelBackgroundColor: '#6366F1' },
         },
+        handleScale: false,
+        handleScroll: false,
       });
 
       priceSeries = priceChart.addSeries(LightweightCharts.LineSeries, {
@@ -2474,6 +2554,8 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
         el.className = 'news-dot ' + (n.sentiment === 1 ? 'bullish' : 'bearish')
           + (n.priority === 'BREAKING_CRITICAL' ? ' breaking' : n.priority === 'NOTABLE_CATALYST' ? ' catalyst' : '');
         el.title = n.headline;
+        el.dataset.priority = n.priority || '';
+        el.dataset.sentiment = String(n.sentiment);
 
         el.addEventListener('mouseenter', () => showNewsDotTooltip(el, n));
         el.addEventListener('mouseleave', hideNewsDotTooltip);
@@ -2483,7 +2565,11 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
         newsDots.push({ el, timeSec: Math.floor(tMs / 1000), price: priceAtTime(tMs), news: n });
       });
 
-      positionNewsDots();
+      // Defer positioning until the chart has finished its first layout pass
+      requestAnimationFrame(() => {
+        positionNewsDots();
+        updateChartDotVisibility();
+      });
     }
 
     // Interpolate the close price at a given timestamp (ms) from the candle series
@@ -2513,13 +2599,42 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
         const t = Math.max(first, Math.min(last, dot.timeSec));
         const x = timeScale.timeToCoordinate(t);
         const y = dot.price != null ? priceSeries.priceToCoordinate(dot.price) : null;
-        if (x == null || y == null) {
+        // Store out-of-range flag; visibility filtering is handled by updateChartDotVisibility()
+        dot.outOfRange = (x == null || y == null);
+        if (!dot.outOfRange) {
+          dot.el.style.left = x + 'px';
+          dot.el.style.top = y + 'px';
+        }
+      });
+      // Re-apply visibility so display is consistent
+      updateChartDotVisibility();
+    }
+
+    // Show/hide dots on the chart according to the active symbolNewsFilter and position validity
+    function updateChartDotVisibility() {
+      newsDots.forEach(dot => {
+        const n = dot.news;
+        if (dot.outOfRange) {
           dot.el.style.display = 'none';
           return;
         }
-        dot.el.style.display = 'block';
-        dot.el.style.left = x + 'px';
-        dot.el.style.top = y + 'px';
+        let visible = true;
+        if (symbolNewsFilter === 'breaking') {
+          visible = n.priority === 'BREAKING_CRITICAL';
+        } else if (symbolNewsFilter === 'catalyst') {
+          visible = n.priority === 'NOTABLE_CATALYST';
+        } else if (symbolNewsFilter === 'bullish') {
+          visible = n.sentiment === 1;
+        } else if (symbolNewsFilter === 'bearish') {
+          visible = n.sentiment === 0;
+        }
+        if (symbolNewsSearch) {
+          visible = visible && (
+            (n.headline && n.headline.toLowerCase().includes(symbolNewsSearch)) ||
+            (n.summary && n.summary.toLowerCase().includes(symbolNewsSearch))
+          );
+        }
+        dot.el.style.display = visible ? 'block' : 'none';
       });
     }
 
@@ -2565,19 +2680,24 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
 
     function setSymbolNewsFilter(filter, btn) {
       symbolNewsFilter = filter;
+      symbolNewsPage = 0;
       document.querySelectorAll('#symbolNewsFilterPills .control-btn').forEach(b => b.classList.remove('active'));
       if (btn) btn.classList.add('active');
       filterAndRenderSymbolNews();
+      updateChartDotVisibility();
     }
 
     function onSymbolNewsSortChange(sort) {
       symbolNewsSort = sort;
+      symbolNewsPage = 0;
       filterAndRenderSymbolNews();
     }
 
     function onSymbolNewsSearch(val) {
       symbolNewsSearch = (val || '').trim().toLowerCase();
+      symbolNewsPage = 0;
       filterAndRenderSymbolNews();
+      updateChartDotVisibility();
     }
 
     function filterAndRenderSymbolNews() {
@@ -2610,19 +2730,25 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
         news.sort((a, b) => new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime());
       }
 
+      const totalCount = news.length;
+      const totalPages = Math.max(1, Math.ceil(totalCount / SYMBOL_NEWS_PAGE_SIZE));
+      symbolNewsPage = Math.min(symbolNewsPage, totalPages - 1);
+      const pageStart = symbolNewsPage * SYMBOL_NEWS_PAGE_SIZE;
+      const pageNews = news.slice(pageStart, pageStart + SYMBOL_NEWS_PAGE_SIZE);
+
       const container = document.getElementById('symbolNewsList');
       const badge = document.getElementById('symbolNewsCountBadge');
       const heading = document.getElementById('symbolNewsHeading');
 
       heading.textContent = \`📰 Published News & Catalysts for \${activeSymbol}\`;
-      badge.textContent = \`\${news.length} Articles\`;
+      badge.textContent = \`\${totalCount} Articles\`;
 
-      if (news.length === 0) {
+      if (totalCount === 0) {
         container.innerHTML = '<div class="empty-state">No published news articles match your filter criteria.</div>';
         return;
       }
 
-      container.innerHTML = news.map(n => {
+      const cards = pageNews.map(n => {
         const isBull = n.sentiment === 1;
         const badgeClass = isBull ? 'pill-bullish' : 'pill-bearish';
         const badgeText = isBull ? '🟢 BULLISH (1)' : '🔴 BEARISH (0)';
@@ -2668,6 +2794,32 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
           </div>
         \`;
       }).join('');
+
+      // Pagination bar
+      const from = pageStart + 1;
+      const to = Math.min(pageStart + SYMBOL_NEWS_PAGE_SIZE, totalCount);
+      const pagination = totalPages > 1 ? \`
+        <div class="news-pagination">
+          <button class="page-btn" onclick="goNewsPage(\${symbolNewsPage - 1})" \${symbolNewsPage === 0 ? 'disabled' : ''}>← Prev</button>
+          <span class="page-info">\${from}–\${to} of \${totalCount}</span>
+          <span class="page-dots">
+            \${Array.from({ length: totalPages }, (_, i) => \`
+              <button class="page-num \${i === symbolNewsPage ? 'active' : ''}" onclick="goNewsPage(\${i})">\${i + 1}</button>
+            \`).join('')}
+          </span>
+          <button class="page-btn" onclick="goNewsPage(\${symbolNewsPage + 1})" \${symbolNewsPage >= totalPages - 1 ? 'disabled' : ''}>Next →</button>
+        </div>
+      \` : '';
+
+      container.innerHTML = cards + pagination;
+    }
+
+    function goNewsPage(page) {
+      const totalCount = (currentSymbolData && currentSymbolData.news) ? currentSymbolData.news.length : 0;
+      const totalPages = Math.max(1, Math.ceil(totalCount / SYMBOL_NEWS_PAGE_SIZE));
+      symbolNewsPage = Math.max(0, Math.min(page, totalPages - 1));
+      filterAndRenderSymbolNews();
+      document.getElementById('symbolNewsList').scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
 
     window.addEventListener('resize', () => {

@@ -131,8 +131,8 @@ export class FinnhubClient {
   public async fetchPriceHistory(symbol: string, range = '7d'): Promise<PricePoint[]> {
     const sym = symbol.toUpperCase();
     try {
-      const interval = range === '24h' || range === '1d' ? '15m' : range === '30d' ? '1d' : '1h';
-      const yahooRange = range === '24h' ? '1d' : range === '90d' ? '3mo' : range;
+      const interval = range === '24h' || range === '1d' ? '15m' : range === '30d' ? '1d' : range === '90d' || range === '1y' ? '1d' : '1h';
+      const yahooRange = range === '24h' ? '1d' : range === '90d' ? '3mo' : range === '1y' ? '1y' : range;
       const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?range=${encodeURIComponent(yahooRange)}&interval=${interval}`;
 
       const response = await fetch(url, {
