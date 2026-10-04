@@ -362,6 +362,25 @@ describe('Web Server & API Endpoints', () => {
     assert.ok(res.raw.includes('Back to Radar Dashboard'));
   });
 
+  it('keeps saved interests and presets within the configured watchlist', async () => {
+    const { raw } = await get('/');
+    const constants = raw.slice(raw.indexOf('const ALL_SYMBOLS ='), raw.indexOf('// State'));
+    const load = raw.slice(raw.indexOf('function loadInterestSymbols()'), raw.indexOf('function saveInterestSymbols()'));
+    const preset = raw.slice(raw.indexOf('function selectPreset('), raw.indexOf('function filterTickerChips('));
+    const context: any = { localStorage: { getItem: () => '["NVDA","AVGO","XIACY"]' } };
+    runInNewContext(constants + load + preset + `
+      let interestSymbols = loadInterestSymbols();
+      function saveInterestSymbols() {}
+      saved = interestSymbols;
+      selectPreset('semis'); semis = interestSymbols;
+      selectPreset('china'); china = interestSymbols;
+    `, context);
+    assert.equal(JSON.stringify(context.saved), '["NVDA"]');
+    assert.equal(JSON.stringify(context.semis), '["NVDA"]');
+    assert.equal(JSON.stringify(context.china), '[]');
+    assert.ok(!raw.includes("selectPreset('ev')"));
+  });
+
   it('should include price fields in /api/stocks when quotes are available', async () => {
     const res = await get('/api/stocks?symbols=NVDA');
     assert.equal(res.status, 200);

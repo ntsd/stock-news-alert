@@ -1692,7 +1692,6 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
             <button class="preset-btn" onclick="selectPreset('tech')">🚀 Mega Tech</button>
             <button class="preset-btn" onclick="selectPreset('semis')">⚡ Semis</button>
             <button class="preset-btn" onclick="selectPreset('china')">🇨🇳 China/HK</button>
-            <button class="preset-btn" onclick="selectPreset('ev')">🚗 EV & Auto</button>
             <button class="preset-btn" onclick="selectPreset('clear')">🧹 Clear</button>
             <input type="text" class="interest-search" id="tickerSearch" placeholder="Find ticker..." oninput="filterTickerChips(this.value)">
           </div>
@@ -1943,9 +1942,8 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
     // Curated Presets
     const PRESETS = {
       tech: ['AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN', 'META'],
-      semis: ['NVDA', 'AMD', 'TSM', 'AVGO', 'ARM', 'QCOM'],
-      china: ['BABA', 'TCEHY', 'BYDDY', 'BIDU', 'JD', 'PDD'],
-      ev: ['TSLA', 'BYDDY', 'NIO', 'LI', 'UBER'],
+      semis: ['NVDA', 'AMD', 'TSM'],
+      china: ['BABA', 'TCEHY', 'BYDDY', 'PDD', 'XIACY'],
     };
 
     // State
@@ -1971,7 +1969,8 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
         if (stored) {
           const parsed = JSON.parse(stored);
           if (Array.isArray(parsed) && parsed.length > 0) {
-            return parsed.map(s => String(s).toUpperCase());
+            const symbols = parsed.map(s => String(s).toUpperCase()).filter(s => ALL_SYMBOLS.includes(s));
+            if (symbols.length) return symbols;
           }
         }
       } catch (e) {
@@ -2010,7 +2009,7 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
       } else if (preset === 'clear') {
         interestSymbols = [];
       } else if (PRESETS[preset]) {
-        interestSymbols = [...PRESETS[preset]];
+        interestSymbols = PRESETS[preset].filter(s => ALL_SYMBOLS.includes(s));
       }
       saveInterestSymbols();
     }

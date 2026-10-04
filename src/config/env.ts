@@ -30,7 +30,7 @@ export const envSchema = z.object({
   WATCHLIST: z
     .string()
     .optional()
-    .default('AAPL,MSFT,NVDA,GOOGL,AMZN,META,TSLA,AMD,AVGO,QCOM,TSM,ARM,PLTR,NFLX,CRM,ORCL,COIN,UBER,BABA,TCEHY,BYDDY,BIDU,JD,PDD,NIO,LI')
+    .default('AAPL,MSFT,NVDA,GOOGL,AMZN,META,TSLA,AMD,TSM,PLTR,NFLX,BABA,TCEHY,BYDDY,PDD,XIACY')
     .transform((val) =>
       val
         .split(',')

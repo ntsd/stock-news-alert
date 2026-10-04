@@ -10,6 +10,14 @@ describe('Environment Configuration & Validation', () => {
     TELEGRAM_CHAT_ID: '123456789',
   };
 
+  it('defaults to the exact 16-symbol watchlist', () => {
+    const result = envSchema.parse(baseValidEnv);
+    assert.deepEqual(result.WATCHLIST, [
+      'AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN', 'META', 'TSLA', 'AMD',
+      'TSM', 'PLTR', 'NFLX', 'BABA', 'TCEHY', 'BYDDY', 'PDD', 'XIACY',
+    ]);
+  });
+
   it('should default HISTORY_SYNC_DAYS to 7 (1 week)', () => {
     const result = envSchema.safeParse(baseValidEnv);
     assert.ok(result.success);

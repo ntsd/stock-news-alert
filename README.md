@@ -44,7 +44,7 @@ Breaking News Article ──► Jev System 1 Decision ──► Typed Binary Sig
 ```mermaid
 flowchart TD
     subgraph Scheduler ["Deterministic Scheduler & Rate Limiter"]
-        A["Circular Watchlist Queue<br/>26 Tickers: US + HK ADRs"] -->|Paced 2.0s Tick| B["Finnhub News Client"]
+        A["Circular Watchlist Queue<br/>16 Tickers: US + HK ADRs"] -->|Paced 2.0s Tick| B["Finnhub News Client"]
     end
 
     subgraph External ["Finnhub & Yahoo Finance"]
@@ -99,7 +99,7 @@ The service embeds a dark-mode web application and REST API:
   - **Unified Filter Bar (Chart + News):** A single filter strip above the chart controls both dot visibility and the news list simultaneously — filter by `All`, `🔥 Breaking`, `⚡ Catalysts`, `🟢 Bullish`, `🔴 Bearish`. Sort by Latest, Highest Urgency, or Confidence. Inline headline search.
   - **Paginated News Feed (10 per page):** Prevents infinite scroll overload on heavy watchlists. Page navigation resets on every filter or sort change.
 * **Real-Time Price Telemetry:** Watched stocks display live prices, dollar changes, and percent changes fetched via Finnhub `/quote` alongside sentiment telemetry.
-* **Interactive Interest Symbols Filtering:** Multi-select ticker selector with quick presets (Mega Tech, Semis, China/HK ADRs, EV) and instant search, persisted in `localStorage`.
+* **Interactive Interest Symbols Filtering:** Multi-select ticker selector with quick presets (Mega Tech, Semis, China/HK ADRs) and instant search, persisted in `localStorage`.
 * **Top Impact News Spotlight:** Dedicated hero spotlight section (`/api/top-news`) highlighting high-urgency catalysts and breaking announcements across your selected interest symbols.
 * **Order by Impact / Urgency:** Sort breaking news by TypeSafe Jev `urgencyScore` (Impact), chronological date, or model confidence.
 * **Dynamic Date Range Filtering:** Quick date range selectors (`3D` default, `24H`, `7D`, `30D`, `1Y`) and custom date range pickers.
@@ -174,7 +174,7 @@ Render reads [`render.yaml`](render.yaml) automatically to configure the web ser
 | `ELEVENLABS_VOICE_ID` | No | `pNInz6obpgDQGcFmaJgB` | ElevenLabs Voice ID (Adam - financial broadcast) |
 | `ENABLE_VOICE_ALERTS`| No | `true` | Enables ElevenLabs voice note alerts in Telegram |
 | `SENTRY_DSN` | No | — | Sentry DSN for Agent Tracing & performance monitoring |
-| `WATCHLIST` | No | 26 tech & US ADR tickers | Comma-separated list of ticker symbols |
+| `WATCHLIST` | No | AAPL,MSFT,NVDA,GOOGL,AMZN,META,TSLA,AMD,TSM,PLTR,NFLX,BABA,TCEHY,BYDDY,PDD,XIACY | Comma-separated list of ticker symbols |
 | `POLL_INTERVAL_MS` | No | `2000` | Paced interval between ticker polls (30 req/min) |
 | `MIN_CONFIDENCE` | No | `0.50` | Minimum confidence cutoff (0.0 to 1.0) |
 | `HISTORY_SYNC_DAYS` | No | `7` | Historical lookback window in days for initial sync (1 to 1825) |
