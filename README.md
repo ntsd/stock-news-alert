@@ -101,7 +101,7 @@ The service embeds a dark-mode web application and REST API:
 * **Real-Time Price Telemetry:** Watched stocks display live prices, dollar changes, and percent changes fetched via Finnhub `/quote` alongside sentiment telemetry.
 * **Cached Equities Summary:** `/api/stocks` shares one 30-second watchlist summary across interest filters and concurrent requests. Expired summaries remain visible while refreshing; a failed refresh retains the last successful result and retries after five seconds. The first request after startup still waits for MongoDB.
 * **Per-Symbol Homepage Snapshots:** `/api/home-news?symbol=AAPL` returns the complete seven-day news window for one configured ticker, without audio payloads. The server shares each snapshot for 30 seconds across visitors; the browser shares it between spotlight and feed. Dates, signals, sorting, symbol selection, and pagination filter loaded snapshots locally—no new date/page Mongo queries. Refreshes coalesce per ticker, preserve cached results on failure, and retry after five seconds. Newly selected tickers and a new UTC day load fresh snapshots. Equity totals are aggregated inside MongoDB rather than transferring the article archive.
-* **Interactive Interest Symbols Filtering:** Multi-select ticker selector with quick presets (Mega Tech, Semis, China/HK ADRs) and instant search, persisted in `localStorage`.
+* **Interactive Interest Symbols Filtering:** Multi-select ticker selector with quick presets (Mega Tech, Semis) and instant search, persisted in `localStorage`.
 * **Top Impact News Spotlight:** Dedicated hero spotlight section (`/api/top-news`) highlighting high-urgency catalysts and breaking announcements across your selected interest symbols.
 * **Order by Impact / Urgency:** Sort breaking news by TypeSafe Jev `urgencyScore` (Impact), chronological date, or model confidence.
 * **Recent News Date Filtering:** News presets are `24H`, `3D` (default), and `7D`; `Custom` date ranges are restricted to the most recent seven days. Public price charts are also capped at seven days; the full price archive remains stored for future backtests.
@@ -179,7 +179,7 @@ Set or override `HISTORY_SYNC_DAYS=7` in the Render service's environment settin
 | `ELEVENLABS_VOICE_ID` | No | `pNInz6obpgDQGcFmaJgB` | ElevenLabs Voice ID (Adam - financial broadcast) |
 | `ENABLE_VOICE_ALERTS`| No | `true` | Enables ElevenLabs voice note alerts in Telegram |
 | `SENTRY_DSN` | No | — | Sentry DSN for Agent Tracing & performance monitoring |
-| `WATCHLIST` | No | AAPL,MSFT,NVDA,GOOGL,AMZN,META,TSLA,AMD,TSM,BABA,TCEHY,XIACY | Comma-separated list of ticker symbols |
+| `WATCHLIST` | No | AAPL,MSFT,NVDA,GOOGL,AMZN,META,TSLA,AMD,TSM,BABA | Comma-separated list of ticker symbols |
 | `POLL_INTERVAL_MS` | No | `2000` | Paced interval between ticker polls (30 req/min) |
 | `MIN_CONFIDENCE` | No | `0.50` | Minimum confidence cutoff (0.0 to 1.0) |
 | `HISTORY_SYNC_DAYS` | No | `7` | Integer 0–7: `0` disables history sync and Mongo reevaluation, polling today's news in live alert mode; 1–7 enables bounded recent news sync. Does not limit dashboard access, price history, or archive retention. |

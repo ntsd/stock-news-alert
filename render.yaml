@@ -10,7 +10,7 @@ services:
       - key: NODE_ENV
         value: production
       - key: WATCHLIST
-        value: AAPL,MSFT,NVDA,GOOGL,AMZN,META,TSLA,AMD,TSM,BABA,TCEHY,XIACY
+        value: AAPL,MSFT,NVDA,GOOGL,AMZN,META,TSLA,AMD,TSM,BABA
       - key: POLL_INTERVAL_MS
         value: "2000"
       - key: MIN_CONFIDENCE

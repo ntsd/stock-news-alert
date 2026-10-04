@@ -1776,7 +1776,6 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
             <button class="preset-btn" onclick="selectPreset('all')">Select All</button>
             <button class="preset-btn" onclick="selectPreset('tech')">🚀 Mega Tech</button>
             <button class="preset-btn" onclick="selectPreset('semis')">⚡ Semis</button>
-            <button class="preset-btn" onclick="selectPreset('china')">🇨🇳 China/HK</button>
             <button class="preset-btn" onclick="selectPreset('clear')">🧹 Clear</button>
             <input type="text" class="interest-search" id="tickerSearch" placeholder="Find ticker..." oninput="filterTickerChips(this.value)">
           </div>
@@ -2002,7 +2001,6 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
     const PRESETS = {
       tech: ['AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN', 'META'],
       semis: ['NVDA', 'AMD', 'TSM'],
-      china: ['BABA', 'TCEHY', 'BYDDY', 'PDD', 'XIACY'],
     };
 
     // State

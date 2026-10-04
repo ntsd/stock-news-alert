@@ -232,7 +232,7 @@ SENTRY_DSN=https://examplePublicKey@o0.ingest.sentry.io/123456
 # =====================================================
 # OPERATIONAL TUNING
 # =====================================================
-WATCHLIST=AAPL,MSFT,NVDA,GOOGL,AMZN,META,TSLA,AMD,TSM,BABA,TCEHY,XIACY
+WATCHLIST=AAPL,MSFT,NVDA,GOOGL,AMZN,META,TSLA,AMD,TSM,BABA
 POLL_INTERVAL_MS=2000
 MIN_CONFIDENCE=0.50
 HISTORY_SYNC_DAYS=7

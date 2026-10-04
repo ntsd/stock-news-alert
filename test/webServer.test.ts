@@ -503,17 +503,20 @@ describe('Web Server & API Endpoints', () => {
     const constants = raw.slice(raw.indexOf('const ALL_SYMBOLS ='), raw.indexOf('// State'));
     const load = raw.slice(raw.indexOf('function loadInterestSymbols()'), raw.indexOf('function saveInterestSymbols()'));
     const preset = raw.slice(raw.indexOf('function selectPreset('), raw.indexOf('function filterTickerChips('));
-    const context: any = { localStorage: { getItem: () => '["NVDA","AVGO","XIACY"]' } };
+    const context: any = { localStorage: { getItem: () => '["NVDA","TCEHY","XIACY"]' } };
     runInNewContext(constants + load + preset + `
       let interestSymbols = loadInterestSymbols();
       function saveInterestSymbols() {}
       saved = interestSymbols;
       selectPreset('semis'); semis = interestSymbols;
-      selectPreset('china'); china = interestSymbols;
+      selectPreset('tech'); tech = interestSymbols;
     `, context);
     assert.equal(JSON.stringify(context.saved), '["NVDA"]');
     assert.equal(JSON.stringify(context.semis), '["NVDA"]');
-    assert.equal(JSON.stringify(context.china), '[]');
+    assert.equal(JSON.stringify(context.tech), '["AAPL","MSFT","NVDA"]');
+    assert.ok(!raw.includes("selectPreset('china')"));
+    assert.ok(!raw.includes('China/HK'));
+    assert.ok(!raw.includes('china:'));
     for (const stored of [null, '["ORCL","XIACY"]']) {
       const fallback: any = { localStorage: { getItem: () => stored } };
       runInNewContext(constants + load + 'saved = loadInterestSymbols();', fallback);
