@@ -828,6 +828,11 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
       font-weight: 700;
       color: #FFF;
       letter-spacing: 0.5px;
+      text-decoration: none;
+    }
+
+    .tag-sym:hover, .tag-sym:focus-visible {
+      background: rgba(99, 102, 241, 0.3);
     }
 
     .star-pin {
@@ -2252,7 +2257,7 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
               <div>
                 <div class="spotlight-top">
                   <div style="display:flex; align-items:center; gap:6px;">
-                    <span class="tag-sym">\${n.symbol}</span>
+                    <a class="tag-sym" href="/symbol/\${encodeURIComponent(n.symbol)}" title="View \${n.symbol} chart and news">\${n.symbol}</a>
                     <span class="stock-pill \${badgeClass}">\${badgeText}</span>
                   </div>
                   <span class="tag-time">\${timeStr}</span>
@@ -2375,7 +2380,7 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
             <div class="news-card \${n.priority === 'BREAKING_CRITICAL' ? 'breaking' : ''}">
               <div class="news-card-header">
                 <div class="news-tags">
-                  <span class="tag-sym" onclick="filterBySingleSymbol('\${n.symbol}')" style="cursor:pointer;" title="Filter by \${n.symbol}">\${n.symbol}</span>
+                  <a class="tag-sym" href="/symbol/\${encodeURIComponent(n.symbol)}" title="View \${n.symbol} chart and news">\${n.symbol}</a>
                   \${priorityPill}
                   <span class="stock-pill pill-urgency">⚡ \${urgencyPct}% Impact</span>
                   <span class="stock-pill \${badgeClass}">\${badgeText}</span>
@@ -2955,7 +2960,7 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
           <div class="news-card \${n.priority === 'BREAKING_CRITICAL' ? 'breaking' : ''}" id="symbol-news-\${n._id}">
             <div class="news-card-header">
               <div class="news-tags">
-                <span class="tag-sym">\${n.symbol}</span>
+                <a class="tag-sym" href="/symbol/\${encodeURIComponent(n.symbol)}" title="View \${n.symbol} chart and news">\${n.symbol}</a>
                 \${priorityPill}
                 <span class="stock-pill pill-urgency">⚡ \${urgencyPct}% Impact</span>
                 <span class="stock-pill \${badgeClass}">\${badgeText}</span>

@@ -503,6 +503,14 @@ describe('Web Server & API Endpoints', () => {
     assert.ok(!raw.includes("selectPreset('ev')"));
   });
 
+  it('links symbol badges to symbol pages in all three news card renderers', async () => {
+    const { raw } = await get('/');
+    const links = raw.match(/<a class="tag-sym" href="\/symbol\/\$\{encodeURIComponent\(n.symbol\)\}"/g) || [];
+    assert.equal(links.length, 3);
+    assert.ok(!raw.includes('<span class="tag-sym"'));
+    assert.ok(!raw.includes('title="Filter by ${n.symbol}"'));
+  });
+
   it('should include price fields in /api/stocks when quotes are available', async () => {
     const res = await get('/api/stocks?symbols=NVDA');
     assert.equal(res.status, 200);
