@@ -81,24 +81,29 @@ flowchart TD
 
 ---
 
-## 🌐 Live Web Dashboard & REST API
+## 🌐 Live Web Dashboard, Symbol Pages & REST API
 
 The service embeds a dark-mode web application and REST API at `http://localhost:3000`:
-* **Interactive Interest Symbols Filtering:** Multi-select ticker selector with quick presets (Mega Tech, Semis, China/HK ADRs, EV) and instant search, persisted across sessions in `localStorage`.
+* **Dedicated Symbol Pages (`/symbol/:symbol`):**
+  - **Interactive HTML5 Canvas Price Chart:** High-performance responsive chart (`24H`, `7D`, `30D`, `90D`) with gradient area fills and price guidelines.
+  - **Published News Dots on Chart:** Each news publication event is plotted directly on the price line with sentiment-coded markers: 🟢 **Emerald Green** for Bullish signals, 🔴 **Rose Red** for Bearish signals, and a glowing outer halo for 🔥 **Breaking Critical** catalysts.
+  - **Hover Tooltips & Click-to-Jump Navigation:** Hovering over any dot displays an instant frosted glass tooltip with headline, sentiment, impact score, and time. Clicking a dot smoothly scrolls directly to the article with an animated neon flash.
+  - **Symbol News Feed with Client-Side Filters:** Instant filtering by signal (`All`, `Breaking Only`, `Catalysts`, `Bullish`, `Bearish`), sorting (`Latest First`, `Highest Impact`, `Confidence`), and real-time headline search.
+* **Real-Time Price Telemetry:** Watched stocks display live prices, dollar changes, and percent changes fetched via Finnhub `/quote` alongside sentiment telemetry.
+* **Interactive Interest Symbols Filtering:** Multi-select ticker selector with quick presets (Mega Tech, Semis, China/HK ADRs, EV) and instant search, persisted in `localStorage`.
 * **Top Impact News Spotlight:** Dedicated hero spotlight section (`/api/top-news`) highlighting high-urgency catalysts and breaking announcements across your selected interest symbols.
 * **Order by Impact / Urgency:** Sort breaking news by TypeSafe Jev `urgencyScore` (Impact), chronological date, or model confidence.
 * **Dynamic Date Range Filtering:** Quick date range selectors (`3D` default, `24H`, `7D`, `30D`, `1Y`) and custom date range pickers.
-* **Top Watched Equities:** Real-time stock cards ranked by bullish sentiment ratio, confidence meter, and article volume, with one-click star (⭐) pinning to toggle interest symbols.
-* **ElevenLabs Audio Playback:** Click "🎙 Listen with ElevenLabs" on any card to stream voice synthesis directly in the browser with live animated audio waves!
-* **Render Telemetry:** Live health status (`/health`), rate-limit consumption (~30 req/min), and cache hit metrics.
+* **ElevenLabs Audio Playback:** Click "🎙 Listen with ElevenLabs" on high-impact cards (`BREAKING_CRITICAL` and `NOTABLE_CATALYST`) to stream voice synthesis directly in the browser with live animated audio waves!
+* **Render Telemetry:** Live health status (`/health`), rate-limit consumption (~27 req/min), and cache hit metrics.
 
 ---
 
 ## 🛡 Production Engineering Features
 
-1. **Guaranteed Finnhub Rate Limit Compliance:**
+1. **Guaranteed Finnhub Rate Limit Compliance & 1-Minute Poller Cycle:**
    - Free tier limit is 60 requests/minute.
-   - Paced scheduler ticks at `1,200ms` (~50 req/min), leaving a 10-call safety buffer for network retries and clock skew.
+   - Paced scheduler ticks at `2,200ms` (~27 req/min across 27 tickers = 59.4s full cycle per symbol), fetching both real-time price quotes and company news continuously without exceeding API caps.
 2. **Centralized MongoDB Shared Cache & Startup Warm-Up:**
    - On boot, loads recent article IDs directly into the in-memory LRU cache (`getRecentArticleIds`), guaranteeing zero duplicate alerts across container restarts or Render redeployments.
    - Predictions and synthesized ElevenLabs MP3 binaries are persisted in MongoDB Atlas, sharing model decisions and audio buffers across instances.

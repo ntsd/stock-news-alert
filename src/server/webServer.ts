@@ -2,6 +2,7 @@ import http from 'node:http';
 import type { NewsAlertPoller } from '../scheduler/poller.js';
 import type { PredictionStorageService } from '../services/mongodb.js';
 import type { ElevenLabsService } from '../services/elevenlabs.js';
+import type { FinnhubClient } from '../services/finnhub.js';
 
 export interface WebServerOptions {
   port: number;
@@ -9,10 +10,11 @@ export interface WebServerOptions {
   poller: NewsAlertPoller;
   storage: PredictionStorageService;
   elevenlabsService: ElevenLabsService;
+  finnhubClient?: FinnhubClient;
 }
 
 export function createWebServer(options: WebServerOptions): http.Server {
-  const { port, watchlist, poller, storage, elevenlabsService } = options;
+  const { port, watchlist, poller, storage, elevenlabsService, finnhubClient } = options;
 
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
@@ -200,10 +202,75 @@ export function createWebServer(options: WebServerOptions): http.Server {
         return;
       }
 
-      // 7. Web Dashboard UI
-      if (url.pathname === '/' || url.pathname === '/index.html') {
+      // 7. Real-Time Price Quote endpoint for a symbol
+      if (url.pathname.startsWith('/api/quote/')) {
+        const symbol = url.pathname.replace('/api/quote/', '').trim().toUpperCase();
+        let quote = await storage.getQuote(symbol);
+        if (!quote && finnhubClient) {
+          quote = await finnhubClient.fetchQuote(symbol);
+          if (quote) {
+            await storage.saveQuote(quote);
+          }
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache' });
+        res.end(JSON.stringify({ quote }));
+        return;
+      }
+
+      // 8. Symbol Price Chart & Published News endpoint
+      if (url.pathname.startsWith('/api/chart/')) {
+        const symbol = url.pathname.replace('/api/chart/', '').trim().toUpperCase();
+        const range = url.searchParams.get('range') || '7d';
+
+        let quote = await storage.getQuote(symbol);
+        if (!quote && finnhubClient) {
+          quote = await finnhubClient.fetchQuote(symbol);
+          if (quote) {
+            await storage.saveQuote(quote);
+          }
+        }
+
+        const candles = finnhubClient
+          ? await finnhubClient.fetchPriceHistory(symbol, range)
+          : [];
+
+        // Determine lookback for news articles based on range
+        const now = Date.now();
+        const rangeMs =
+          range === '24h' || range === '1d'
+            ? 24 * 3600 * 1000
+            : range === '30d'
+            ? 30 * 24 * 3600 * 1000
+            : range === '90d'
+            ? 90 * 24 * 3600 * 1000
+            : 7 * 24 * 3600 * 1000;
+        const fromDate = new Date(now - rangeMs).toISOString().split('T')[0];
+
+        const news = await storage.getRecentNews({
+          symbol,
+          fromDate,
+          limit: 100,
+          sortBy: 'date',
+        });
+
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache' });
+        res.end(JSON.stringify({ symbol, quote, candles, news }));
+        return;
+      }
+
+      // 9. Dedicated Symbol Page route: /symbol/:symbol
+      if (url.pathname.startsWith('/symbol/')) {
+        const symbol = url.pathname.replace('/symbol/', '').trim().toUpperCase();
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        res.end(renderDashboardHtml(watchlist));
+        res.end(renderDashboardHtml(watchlist, symbol));
+        return;
+      }
+
+      // 10. Web Dashboard UI
+      if (url.pathname === '/' || url.pathname === '/index.html') {
+        const symbol = url.searchParams.get('symbol')?.trim().toUpperCase() || undefined;
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        res.end(renderDashboardHtml(watchlist, symbol));
         return;
       }
 
@@ -224,8 +291,9 @@ export function createWebServer(options: WebServerOptions): http.Server {
   return server;
 }
 
-function renderDashboardHtml(defaultWatchlist: string[]): string {
+function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string): string {
   const watchlistJson = JSON.stringify(defaultWatchlist);
+  const initialSymbolJson = JSON.stringify(initialSymbol || '');
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1050,10 +1118,348 @@ function renderDashboardHtml(defaultWatchlist: string[]): string {
       border: 1px dashed var(--border-color);
     }
 
+    /* Price Card Row */
+    .stock-price-row {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      margin: 8px 0 4px;
+      padding: 6px 10px;
+      background: rgba(0, 0, 0, 0.28);
+      border-radius: 8px;
+      border: 1px solid rgba(255, 255, 255, 0.04);
+    }
+
+    .stock-price {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 15px;
+      font-weight: 700;
+      color: #F8FAFC;
+    }
+
+    .stock-price-change {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 2px 6px;
+      border-radius: 4px;
+    }
+
+    .stock-price-change.pos {
+      color: #34D399;
+      background: rgba(16, 185, 129, 0.12);
+    }
+
+    .stock-price-change.neg {
+      color: #F87171;
+      background: rgba(239, 68, 68, 0.12);
+    }
+
+    .btn-symbol-chart {
+      width: 100%;
+      margin-top: 8px;
+      padding: 6px 10px;
+      background: rgba(99, 102, 241, 0.12);
+      border: 1px solid rgba(99, 102, 241, 0.25);
+      color: #A5B4FC;
+      border-radius: 8px;
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      transition: all 0.2s;
+    }
+
+    .btn-symbol-chart:hover {
+      background: rgba(99, 102, 241, 0.25);
+      color: #FFF;
+      border-color: #818CF8;
+    }
+
+    /* Symbol Detail View */
+    .symbol-view-container {
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+      animation: fadeIn 0.3s ease;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .symbol-nav-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: -6px;
+    }
+
+    .btn-back-radar {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid var(--border-color);
+      color: #E2E8F0;
+      padding: 8px 16px;
+      border-radius: 10px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .btn-back-radar:hover {
+      background: rgba(99, 102, 241, 0.2);
+      border-color: #818CF8;
+      color: #FFF;
+    }
+
+    .symbol-hero-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 16px;
+      padding: 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 20px;
+      box-shadow: 0 16px 36px -12px rgba(0, 0, 0, 0.6);
+    }
+
+    .symbol-hero-left {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .symbol-avatar {
+      width: 58px;
+      height: 58px;
+      border-radius: 14px;
+      background: linear-gradient(135deg, #1E1B4B 0%, #312E81 100%);
+      border: 1px solid rgba(129, 140, 248, 0.35);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 20px;
+      font-weight: 800;
+      color: #C7D2FE;
+      font-family: 'Outfit', sans-serif;
+    }
+
+    .symbol-title-box h2 {
+      font-family: 'Outfit', sans-serif;
+      font-size: 28px;
+      font-weight: 800;
+      color: #FFF;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .symbol-company-title {
+      font-size: 14px;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+
+    .symbol-hero-right {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 6px;
+    }
+
+    .symbol-price-large {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 34px;
+      font-weight: 800;
+      color: #FFF;
+      letter-spacing: -0.5px;
+    }
+
+    .symbol-pill-huge {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 13px;
+      font-weight: 700;
+      padding: 4px 12px;
+      border-radius: 8px;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .symbol-pill-huge.pos {
+      color: #34D399;
+      background: rgba(16, 185, 129, 0.15);
+      border: 1px solid rgba(16, 185, 129, 0.3);
+    }
+
+    .symbol-pill-huge.neg {
+      color: #F87171;
+      background: rgba(239, 68, 68, 0.15);
+      border: 1px solid rgba(239, 68, 68, 0.3);
+    }
+
+    .symbol-stats-banner {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+      gap: 12px;
+    }
+
+    .stat-tile {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      padding: 12px 14px;
+    }
+
+    .stat-tile-label {
+      font-size: 11px;
+      text-transform: uppercase;
+      color: var(--text-sub);
+      letter-spacing: 0.5px;
+      font-weight: 600;
+    }
+
+    .stat-tile-val {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 16px;
+      font-weight: 700;
+      color: #F1F5F9;
+      margin-top: 4px;
+    }
+
+    /* Price Chart Card with Published News Dots */
+    .chart-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 16px;
+      padding: 20px 24px 24px;
+      position: relative;
+      box-shadow: 0 16px 36px -12px rgba(0, 0, 0, 0.6);
+    }
+
+    .chart-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+
+    .chart-title-group {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .chart-legend {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 12px;
+      color: var(--text-muted);
+      flex-wrap: wrap;
+    }
+
+    .legend-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .legend-dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+    }
+
+    .range-buttons {
+      display: inline-flex;
+      background: rgba(0, 0, 0, 0.35);
+      border-radius: 8px;
+      padding: 3px;
+      border: 1px solid var(--border-color);
+    }
+
+    .range-btn {
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      padding: 4px 12px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .range-btn:hover {
+      color: #FFF;
+    }
+
+    .range-btn.active {
+      background: #6366F1;
+      color: #FFF;
+      box-shadow: 0 2px 6px rgba(99, 102, 241, 0.4);
+    }
+
+    .chart-canvas-wrap {
+      width: 100%;
+      height: 380px;
+      position: relative;
+    }
+
+    #priceNewsCanvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+      cursor: crosshair;
+    }
+
+    .chart-dot-tooltip {
+      position: absolute;
+      display: none;
+      z-index: 100;
+      background: rgba(15, 23, 42, 0.96);
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      backdrop-filter: blur(12px);
+      border-radius: 10px;
+      padding: 10px 14px;
+      color: #FFF;
+      font-size: 12px;
+      box-shadow: 0 12px 28px rgba(0, 0, 0, 0.7);
+      pointer-events: none;
+      max-width: 280px;
+      line-height: 1.4;
+      transform: translate(-50%, -115%);
+    }
+
+    .card-highlight-flash {
+      animation: flashGlow 2.5s ease;
+    }
+
+    @keyframes flashGlow {
+      0% { box-shadow: 0 0 0 2px #6366F1, 0 0 24px rgba(99, 102, 241, 0.8); }
+      100% { box-shadow: none; }
+    }
+
     @media (max-width: 900px) {
       .header { flex-direction: column; align-items: flex-start; }
       .stocks-grid { grid-template-columns: 1fr 1fr; }
       .top-news-grid { grid-template-columns: 1fr; }
+      .symbol-hero-card { flex-direction: column; align-items: flex-start; }
+      .symbol-hero-right { align-items: flex-start; }
     }
   </style>
 </head>
@@ -1085,123 +1491,254 @@ function renderDashboardHtml(defaultWatchlist: string[]): string {
       </div>
     </header>
 
-    <!-- Multi-Select Interest Symbols Panel -->
-    <div class="interest-panel" id="interestPanel">
-      <div class="interest-top-bar">
-        <div class="section-title" style="font-size: 16px;">
-          <span>🎯 Watched Interest Symbols</span>
-          <span class="counter-badge" id="interestCountBadge">27 / 27 Selected</span>
+    <!-- View 1: Main Radar Dashboard -->
+    <div id="radarDashboardView">
+      <!-- Multi-Select Interest Symbols Panel -->
+      <div class="interest-panel" id="interestPanel">
+        <div class="interest-top-bar">
+          <div class="section-title" style="font-size: 16px;">
+            <span>🎯 Watched Interest Symbols</span>
+            <span class="counter-badge" id="interestCountBadge">27 / 27 Selected</span>
+          </div>
+          <div class="preset-pills">
+            <button class="preset-btn" onclick="selectPreset('all')">Select All</button>
+            <button class="preset-btn" onclick="selectPreset('tech')">🚀 Mega Tech</button>
+            <button class="preset-btn" onclick="selectPreset('semis')">⚡ Semis</button>
+            <button class="preset-btn" onclick="selectPreset('china')">🇨🇳 China/HK</button>
+            <button class="preset-btn" onclick="selectPreset('ev')">🚗 EV & Auto</button>
+            <button class="preset-btn" onclick="selectPreset('clear')">🧹 Clear</button>
+            <input type="text" class="interest-search" id="tickerSearch" placeholder="Find ticker..." oninput="filterTickerChips(this.value)">
+          </div>
         </div>
-        <div class="preset-pills">
-          <button class="preset-btn" onclick="selectPreset('all')">Select All</button>
-          <button class="preset-btn" onclick="selectPreset('tech')">🚀 Mega Tech</button>
-          <button class="preset-btn" onclick="selectPreset('semis')">⚡ Semis</button>
-          <button class="preset-btn" onclick="selectPreset('china')">🇨🇳 China/HK</button>
-          <button class="preset-btn" onclick="selectPreset('ev')">🚗 EV & Auto</button>
-          <button class="preset-btn" onclick="selectPreset('clear')">🧹 Clear</button>
-          <input type="text" class="interest-search" id="tickerSearch" placeholder="Find ticker..." oninput="filterTickerChips(this.value)">
+        <div class="ticker-chips-grid" id="tickerChipsContainer">
+          <!-- Rendered via JS -->
         </div>
       </div>
-      <div class="ticker-chips-grid" id="tickerChipsContainer">
-        <!-- Rendered via JS -->
-      </div>
-    </div>
 
-    <!-- Spotlight Section: Top News on Interest Symbols -->
-    <div id="topNewsSection" style="margin-bottom: 36px;">
+      <!-- Spotlight Section: Top News on Interest Symbols -->
+      <div id="topNewsSection" style="margin-bottom: 36px;">
+        <div class="section-header">
+          <div class="section-title">
+            <span>🔥 Top Impact News on Watched Symbols</span>
+            <span class="section-subtitle">(Ranked by Market-Moving Materiality & Urgency)</span>
+          </div>
+          <span class="counter-badge" id="spotlightCountBadge">Top 4 Headlines</span>
+        </div>
+        <div class="top-news-grid" id="topNewsGrid">
+          <div class="empty-state">Loading high-impact news on selected symbols...</div>
+        </div>
+      </div>
+
+      <!-- Watched Stocks Sentiment Overview -->
       <div class="section-header">
         <div class="section-title">
-          <span>🔥 Top Impact News on Watched Symbols</span>
-          <span class="section-subtitle">(Ranked by Market-Moving Materiality & Urgency)</span>
+          <span>📊 Top Watched Equities</span>
+          <span class="section-subtitle">(Ranked by Bullish Ratio & Volume)</span>
         </div>
-        <span class="counter-badge" id="spotlightCountBadge">Top 4 Headlines</span>
-      </div>
-      <div class="top-news-grid" id="topNewsGrid">
-        <div class="empty-state">Loading high-impact news on selected symbols...</div>
-      </div>
-    </div>
-
-    <!-- Watched Stocks Sentiment Overview -->
-    <div class="section-header">
-      <div class="section-title">
-        <span>📊 Top Watched Equities</span>
-        <span class="section-subtitle">(Ranked by Bullish Ratio & Volume)</span>
-      </div>
-      <div class="control-group">
-        <label style="font-size: 12px; color: var(--text-muted); display: inline-flex; align-items: center; gap: 6px; cursor: pointer;">
-          <input type="checkbox" id="filterStocksByInterestCheckbox" checked onchange="toggleFilterStocksByInterest(this.checked)">
-          Show Only My Interest Symbols
-        </label>
-      </div>
-    </div>
-    <div class="stocks-grid" id="stocksGrid">
-      <div class="stock-card"><p style="color:#64748B;">Loading watchlist telemetry...</p></div>
-    </div>
-
-    <!-- Breaking News Feed & Filters -->
-    <div class="section-header" style="margin-top: 40px;">
-      <div class="section-title">
-        <span>📰 Real-Time News Signals</span>
-      </div>
-    </div>
-
-    <div class="controls-panel">
-      <!-- Row 1: Date Range Filter & Order By -->
-      <div class="controls-row">
         <div class="control-group">
-          <span class="control-label">📅 Date Range:</span>
-          <div class="pill-buttons" id="datePresetPills">
-            <button class="control-btn active" data-days="3" onclick="setDateRangePreset(3, this)">3D (Default)</button>
-            <button class="control-btn" data-days="1" onclick="setDateRangePreset(1, this)">24H</button>
-            <button class="control-btn" data-days="7" onclick="setDateRangePreset(7, this)">7D</button>
-            <button class="control-btn" data-days="30" onclick="setDateRangePreset(30, this)">30D</button>
-            <button class="control-btn" data-days="365" onclick="setDateRangePreset(365, this)">1Y (All)</button>
-            <button class="control-btn" onclick="toggleCustomDatePicker(this)">Custom</button>
+          <label style="font-size: 12px; color: var(--text-muted); display: inline-flex; align-items: center; gap: 6px; cursor: pointer;">
+            <input type="checkbox" id="filterStocksByInterestCheckbox" checked onchange="toggleFilterStocksByInterest(this.checked)">
+            Show Only My Interest Symbols
+          </label>
+        </div>
+      </div>
+      <div class="stocks-grid" id="stocksGrid">
+        <div class="stock-card"><p style="color:#64748B;">Loading watchlist telemetry...</p></div>
+      </div>
+
+      <!-- Breaking News Feed & Filters -->
+      <div class="section-header" style="margin-top: 40px;">
+        <div class="section-title">
+          <span>📰 Real-Time News Signals</span>
+        </div>
+      </div>
+
+      <div class="controls-panel">
+        <!-- Row 1: Date Range Filter & Order By -->
+        <div class="controls-row">
+          <div class="control-group">
+            <span class="control-label">📅 Date Range:</span>
+            <div class="pill-buttons" id="datePresetPills">
+              <button class="control-btn active" data-days="3" onclick="setDateRangePreset(3, this)">3D (Default)</button>
+              <button class="control-btn" data-days="1" onclick="setDateRangePreset(1, this)">24H</button>
+              <button class="control-btn" data-days="7" onclick="setDateRangePreset(7, this)">7D</button>
+              <button class="control-btn" data-days="30" onclick="setDateRangePreset(30, this)">30D</button>
+              <button class="control-btn" data-days="365" onclick="setDateRangePreset(365, this)">1Y (All)</button>
+              <button class="control-btn" onclick="toggleCustomDatePicker(this)">Custom</button>
+            </div>
+            <div class="custom-date-inputs" id="customDateInputs">
+              <input type="date" class="date-input" id="fromDateInput">
+              <span style="color:var(--text-sub);">to</span>
+              <input type="date" class="date-input" id="toDateInput">
+              <button class="preset-btn" onclick="applyCustomDateRange()">Apply</button>
+            </div>
           </div>
-          <div class="custom-date-inputs" id="customDateInputs">
-            <input type="date" class="date-input" id="fromDateInput">
-            <span style="color:var(--text-sub);">to</span>
-            <input type="date" class="date-input" id="toDateInput">
-            <button class="preset-btn" onclick="applyCustomDateRange()">Apply</button>
+
+          <div class="control-group">
+            <span class="control-label">⚡ Order By:</span>
+            <select class="select-dropdown" id="sortSelect" onchange="onSortChange(this.value)">
+              <option value="impact">💥 Highest Impact (Urgency Score)</option>
+              <option value="date">🕒 Latest First (Newest)</option>
+              <option value="confidence">🎯 Highest Confidence</option>
+            </select>
           </div>
         </div>
 
-        <div class="control-group">
-          <span class="control-label">⚡ Order By:</span>
-          <select class="select-dropdown" id="sortSelect" onchange="onSortChange(this.value)">
-            <option value="impact">💥 Highest Impact (Urgency Score)</option>
-            <option value="date">🕒 Latest First (Newest)</option>
-            <option value="confidence">🎯 Highest Confidence</option>
-          </select>
+        <!-- Row 2: Signal Classification & Specific Ticker -->
+        <div class="controls-row">
+          <div class="control-group">
+            <span class="control-label">🎯 Signal:</span>
+            <div class="pill-buttons">
+              <button class="control-btn active" onclick="setSentimentFilter('all', this)">All Signals</button>
+              <button class="control-btn" onclick="setSentimentFilter('breaking', this)">🔥 Breaking Only</button>
+              <button class="control-btn" onclick="setSentimentFilter('catalyst', this)">⚡ Catalysts</button>
+              <button class="control-btn" onclick="setSentimentFilter('1', this)">🟢 Bullish</button>
+              <button class="control-btn" onclick="setSentimentFilter('0', this)">🔴 Bearish</button>
+            </div>
+          </div>
+
+          <div class="control-group">
+            <span class="control-label">🔍 Ticker:</span>
+            <select class="select-dropdown" id="singleSymbolSelect" onchange="onSingleSymbolChange(this.value)">
+              <option value="">All Interest Symbols</option>
+              ${defaultWatchlist.map((s) => `<option value="${s}">${s}</option>`).join('')}
+            </select>
+          </div>
         </div>
       </div>
 
-      <!-- Row 2: Signal Classification & Specific Ticker -->
-      <div class="controls-row">
-        <div class="control-group">
-          <span class="control-label">🎯 Signal:</span>
-          <div class="pill-buttons">
-            <button class="control-btn active" onclick="setSentimentFilter('all', this)">All Signals</button>
-            <button class="control-btn" onclick="setSentimentFilter('breaking', this)">🔥 Breaking Only</button>
-            <button class="control-btn" onclick="setSentimentFilter('catalyst', this)">⚡ Catalysts</button>
-            <button class="control-btn" onclick="setSentimentFilter('1', this)">🟢 Bullish</button>
-            <button class="control-btn" onclick="setSentimentFilter('0', this)">🔴 Bearish</button>
-          </div>
-        </div>
-
-        <div class="control-group">
-          <span class="control-label">🔍 Ticker:</span>
-          <select class="select-dropdown" id="singleSymbolSelect" onchange="onSingleSymbolChange(this.value)">
-            <option value="">All Interest Symbols</option>
-            ${defaultWatchlist.map((s) => `<option value="${s}">${s}</option>`).join('')}
-          </select>
-        </div>
+      <!-- News Articles List -->
+      <div class="news-list" id="newsList">
+        <div class="empty-state">Polling live breaking news...</div>
       </div>
     </div>
 
-    <!-- News Articles List -->
-    <div class="news-list" id="newsList">
-      <div class="empty-state">Polling live breaking news...</div>
+    <!-- View 2: Dedicated Symbol Detail Page (Price Chart + Published News Dots + Filterable News) -->
+    <div id="symbolDetailView" class="symbol-view-container" style="display: none;">
+      <!-- Navigation Bar -->
+      <div class="symbol-nav-bar">
+        <button class="btn-back-radar" onclick="navigateToRadar()">
+          <span>←</span> Back to Radar Dashboard
+        </button>
+        <div class="status-badges">
+          <div class="badge badge-live">
+            <div class="pulse-dot"></div>
+            Live Chart Sync
+          </div>
+          <div class="badge" id="symbolLastUpdatedBadge">Live Telemetry</div>
+        </div>
+      </div>
+
+      <!-- Hero Card: Price & Summary -->
+      <div class="symbol-hero-card" id="symbolHeroCard">
+        <div class="symbol-hero-left">
+          <div class="symbol-avatar" id="heroSymbolAvatar">--</div>
+          <div class="symbol-title-box">
+            <h2 id="heroSymbolTitle">--</h2>
+            <div class="symbol-company-title" id="heroCompanyTitle">Market Asset Telemetry</div>
+          </div>
+        </div>
+        <div class="symbol-hero-right">
+          <div class="symbol-price-large" id="heroSymbolPrice">$--</div>
+          <div class="symbol-pill-huge pos" id="heroSymbolChange">+0.00 (+0.00%)</div>
+        </div>
+      </div>
+
+      <!-- Stats Banner -->
+      <div class="symbol-stats-banner">
+        <div class="stat-tile">
+          <div class="stat-tile-label">Day High</div>
+          <div class="stat-tile-val" id="statHigh">$--</div>
+        </div>
+        <div class="stat-tile">
+          <div class="stat-tile-label">Day Low</div>
+          <div class="stat-tile-val" id="statLow">$--</div>
+        </div>
+        <div class="stat-tile">
+          <div class="stat-tile-label">Open</div>
+          <div class="stat-tile-val" id="statOpen">$--</div>
+        </div>
+        <div class="stat-tile">
+          <div class="stat-tile-label">Prev Close</div>
+          <div class="stat-tile-val" id="statPrevClose">$--</div>
+        </div>
+        <div class="stat-tile">
+          <div class="stat-tile-label">Total News</div>
+          <div class="stat-tile-val" id="statNewsCount">--</div>
+        </div>
+        <div class="stat-tile">
+          <div class="stat-tile-label">Bullish Ratio</div>
+          <div class="stat-tile-val" id="statBullRatio">--%</div>
+        </div>
+      </div>
+
+      <!-- Interactive Price Chart with News Event Dots -->
+      <div class="chart-card">
+        <div class="chart-header">
+          <div class="chart-title-group">
+            <div class="section-title" style="font-size: 17px;">
+              <span>📈 Price Chart & Published News Dots</span>
+            </div>
+            <div class="chart-legend">
+              <span class="legend-item"><span class="legend-dot" style="background:#6366F1;"></span> Price Line</span>
+              <span class="legend-item"><span class="legend-dot" style="background:#10B981;"></span> 🟢 Bullish News</span>
+              <span class="legend-item"><span class="legend-dot" style="background:#F43F5E;"></span> 🔴 Bearish News</span>
+              <span class="legend-item"><span class="legend-dot" style="background:#EF4444; box-shadow: 0 0 6px #EF4444;"></span> 🔥 Breaking Halo</span>
+            </div>
+          </div>
+          <div class="range-buttons" id="chartRangeButtons">
+            <button class="range-btn" data-range="24h" onclick="setChartRange('24h', this)">24H</button>
+            <button class="range-btn active" data-range="7d" onclick="setChartRange('7d', this)">7D</button>
+            <button class="range-btn" data-range="30d" onclick="setChartRange('30d', this)">30D</button>
+            <button class="range-btn" data-range="90d" onclick="setChartRange('90d', this)">90D</button>
+          </div>
+        </div>
+
+        <div class="chart-canvas-wrap" id="chartCanvasWrap">
+          <canvas id="priceNewsCanvas"></canvas>
+          <div id="chartDotTooltip" class="chart-dot-tooltip"></div>
+        </div>
+      </div>
+
+      <!-- Filterable Symbol News Section -->
+      <div>
+        <div class="section-header" style="margin-top: 16px;">
+          <div class="section-title">
+            <span id="symbolNewsHeading">📰 Published News & Catalysts</span>
+            <span class="section-subtitle">(Click any dot on chart above to jump, or filter below)</span>
+          </div>
+          <span class="counter-badge" id="symbolNewsCountBadge">0 Articles</span>
+        </div>
+
+        <div class="controls-panel">
+          <div class="controls-row">
+            <div class="control-group">
+              <span class="control-label">🎯 Filter:</span>
+              <div class="pill-buttons" id="symbolNewsFilterPills">
+                <button class="control-btn active" onclick="setSymbolNewsFilter('all', this)">All News</button>
+                <button class="control-btn" onclick="setSymbolNewsFilter('breaking', this)">🔥 Breaking</button>
+                <button class="control-btn" onclick="setSymbolNewsFilter('catalyst', this)">⚡ Catalysts</button>
+                <button class="control-btn" onclick="setSymbolNewsFilter('bullish', this)">🟢 Bullish</button>
+                <button class="control-btn" onclick="setSymbolNewsFilter('bearish', this)">🔴 Bearish</button>
+              </div>
+            </div>
+
+            <div class="control-group">
+              <span class="control-label">⚡ Sort:</span>
+              <select class="select-dropdown" id="symbolNewsSortSelect" onchange="onSymbolNewsSortChange(this.value)">
+                <option value="date">🕒 Latest First</option>
+                <option value="impact">💥 Highest Urgency / Impact</option>
+                <option value="confidence">🎯 Highest Confidence</option>
+              </select>
+              <input type="text" class="interest-search" id="symbolNewsSearchInput" placeholder="Search headline..." oninput="onSymbolNewsSearch(this.value)" style="margin-left: 8px;">
+            </div>
+          </div>
+        </div>
+
+        <div class="news-list" id="symbolNewsList">
+          <div class="empty-state">Loading published news for this symbol...</div>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -1412,8 +1949,16 @@ function renderDashboardHtml(defaultWatchlist: string[]): string {
           const confPercent = Math.round(s.avgConfidence * 100);
           const isPinned = interestSymbols.includes(s.symbol);
 
+          const priceStr = s.price != null ? \`$\${Number(s.price).toFixed(2)}\` : '--';
+          const changeVal = s.change != null ? Number(s.change) : 0;
+          const pctVal = s.percentChange != null ? Number(s.percentChange) : 0;
+          const isPos = changeVal >= 0;
+          const changeStr = s.change != null
+            ? \`\${isPos ? '+' : ''}\${changeVal.toFixed(2)} (\${isPos ? '+' : ''}\${pctVal.toFixed(2)}%)\`
+            : '';
+
           return \`
-            <div class="stock-card \${isPinned ? 'interest-active' : ''}" onclick="filterBySingleSymbol('\${s.symbol}')">
+            <div class="stock-card \${isPinned ? 'interest-active' : ''}" onclick="navigateToSymbol('\${s.symbol}')">
               <div class="stock-header">
                 <div class="stock-symbol-group">
                   <span class="star-pin \${isPinned ? 'pinned' : ''}" title="\${isPinned ? 'Remove from Interest Symbols' : 'Add to Interest Symbols'}" onclick="event.stopPropagation(); toggleInterestSymbol('\${s.symbol}');">
@@ -1422,6 +1967,10 @@ function renderDashboardHtml(defaultWatchlist: string[]): string {
                   <span class="stock-symbol">\${s.symbol}</span>
                 </div>
                 <span class="stock-pill \${pillClass}">\${pillText}</span>
+              </div>
+              <div class="stock-price-row">
+                <span class="stock-price">\${priceStr}</span>
+                \${changeStr ? \`<span class="stock-price-change \${isPos ? 'pos' : 'neg'}">\${changeStr}</span>\` : ''}
               </div>
               <div class="stock-stats">
                 <span>Sentiment Ratio</span>
@@ -1437,6 +1986,9 @@ function renderDashboardHtml(defaultWatchlist: string[]): string {
               <div class="stock-last-news" title="\${s.lastHeadline}">
                 \${s.totalArticles} articles • \${s.lastHeadline}
               </div>
+              <button class="btn-symbol-chart" onclick="event.stopPropagation(); navigateToSymbol('\${s.symbol}')">
+                📈 View Symbol Chart & News →
+              </button>
             </div>
           \`;
         }).join('');
@@ -1619,6 +2171,494 @@ function renderDashboardHtml(defaultWatchlist: string[]): string {
       fetchNews();
     }
 
+    // Dedicated Symbol Detail View Logic
+    const INITIAL_SYMBOL = ${initialSymbolJson};
+    let activeSymbol = INITIAL_SYMBOL ? INITIAL_SYMBOL.toUpperCase() : '';
+    let currentChartRange = '7d';
+    let currentSymbolData = null;
+    let symbolNewsFilter = 'all';
+    let symbolNewsSort = 'date';
+    let symbolNewsSearch = '';
+    let renderedDots = [];
+
+    function navigateToSymbol(sym, push = true) {
+      if (!sym) return;
+      activeSymbol = sym.toUpperCase();
+      document.getElementById('radarDashboardView').style.display = 'none';
+      document.getElementById('symbolDetailView').style.display = 'flex';
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      document.title = \`\${activeSymbol} | Price Chart & News | Zero Market Radar\`;
+      if (push) {
+        history.pushState({ symbol: activeSymbol }, '', '/symbol/' + activeSymbol);
+      }
+      loadSymbolData(activeSymbol, currentChartRange);
+    }
+
+    function navigateToRadar(push = true) {
+      activeSymbol = '';
+      document.getElementById('symbolDetailView').style.display = 'none';
+      document.getElementById('radarDashboardView').style.display = 'block';
+      document.title = 'Zero Market Radar | System 1 AI Financial Terminal';
+      if (push) {
+        history.pushState({}, '', '/');
+      }
+    }
+
+    window.addEventListener('popstate', (e) => {
+      if (e.state && e.state.symbol) {
+        navigateToSymbol(e.state.symbol, false);
+      } else {
+        const path = window.location.pathname;
+        if (path.startsWith('/symbol/')) {
+          const sym = path.replace('/symbol/', '').trim().toUpperCase();
+          if (sym) {
+            navigateToSymbol(sym, false);
+            return;
+          }
+        }
+        navigateToRadar(false);
+      }
+    });
+
+    async function loadSymbolData(symbol, range = '7d') {
+      try {
+        const badge = document.getElementById('symbolLastUpdatedBadge');
+        if (badge) badge.textContent = 'Syncing...';
+
+        const res = await fetch(\`/api/chart/\${encodeURIComponent(symbol)}?range=\${encodeURIComponent(range)}\`);
+        const data = await res.json();
+        currentSymbolData = data;
+
+        if (badge) badge.textContent = 'Live • ' + new Date().toLocaleTimeString();
+
+        renderSymbolHero(data);
+        renderPriceChart(data);
+        filterAndRenderSymbolNews();
+      } catch (err) {
+        console.error('Failed to load symbol data:', err);
+      }
+    }
+
+    function setChartRange(range, btn) {
+      currentChartRange = range;
+      document.querySelectorAll('#chartRangeButtons .range-btn').forEach(b => b.classList.remove('active'));
+      if (btn) btn.classList.add('active');
+      if (activeSymbol) {
+        loadSymbolData(activeSymbol, range);
+      }
+    }
+
+    function renderSymbolHero(data) {
+      const sym = data.symbol;
+      const quote = data.quote;
+      const news = data.news || [];
+
+      document.getElementById('heroSymbolAvatar').textContent = sym.slice(0, 4);
+      document.getElementById('heroSymbolTitle').innerHTML = \`
+        \${sym}
+        <span class="stock-pill pill-routine" style="font-size:12px; vertical-align:middle;">US Equity</span>
+      \`;
+      document.getElementById('heroCompanyTitle').textContent = \`Real-Time System 1 Telemetry • \${news.length} Published Articles Synced\`;
+
+      const price = quote && quote.price != null ? Number(quote.price) : (data.candles && data.candles.length ? data.candles[data.candles.length - 1].close : null);
+      const change = quote && quote.change != null ? Number(quote.change) : 0;
+      const pct = quote && quote.percentChange != null ? Number(quote.percentChange) : 0;
+      const isPos = change >= 0;
+
+      const priceEl = document.getElementById('heroSymbolPrice');
+      const changeEl = document.getElementById('heroSymbolChange');
+
+      priceEl.textContent = price != null ? \`$\${price.toFixed(2)}\` : '--';
+      changeEl.className = \`symbol-pill-huge \${isPos ? 'pos' : 'neg'}\`;
+      changeEl.textContent = \`\${isPos ? '+' : ''}\${change.toFixed(2)} (\${isPos ? '+' : ''}\${pct.toFixed(2)}%)\`;
+
+      document.getElementById('statHigh').textContent = quote && quote.high != null ? \`$\${Number(quote.high).toFixed(2)}\` : '--';
+      document.getElementById('statLow').textContent = quote && quote.low != null ? \`$\${Number(quote.low).toFixed(2)}\` : '--';
+      document.getElementById('statOpen').textContent = quote && quote.open != null ? \`$\${Number(quote.open).toFixed(2)}\` : '--';
+      document.getElementById('statPrevClose').textContent = quote && quote.previousClose != null ? \`$\${Number(quote.previousClose).toFixed(2)}\` : '--';
+      document.getElementById('statNewsCount').textContent = \`\${news.length}\`;
+
+      const bullCount = news.filter(n => n.sentiment === 1).length;
+      const bullRatio = news.length > 0 ? Math.round((bullCount / news.length) * 100) : 50;
+      const ratioEl = document.getElementById('statBullRatio');
+      ratioEl.textContent = \`\${bullRatio}%\`;
+      ratioEl.style.color = bullRatio >= 50 ? '#10B981' : '#F43F5E';
+    }
+
+    function renderPriceChart(data) {
+      const canvas = document.getElementById('priceNewsCanvas');
+      if (!canvas) return;
+
+      const wrap = canvas.parentElement;
+      const dpr = window.devicePixelRatio || 1;
+      const rect = wrap.getBoundingClientRect();
+      const width = rect.width;
+      const height = rect.height;
+
+      canvas.width = width * dpr;
+      canvas.height = height * dpr;
+      const ctx = canvas.getContext('2d');
+      ctx.scale(dpr, dpr);
+
+      const candles = (data.candles || []).filter(c => c.close != null && c.timestamp != null);
+      const news = data.news || [];
+      renderedDots = [];
+
+      ctx.clearRect(0, 0, width, height);
+
+      if (candles.length === 0) {
+        ctx.fillStyle = '#64748B';
+        ctx.font = '14px Inter, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('No historical price candles available for this asset & range.', width / 2, height / 2);
+        return;
+      }
+
+      const padding = { top: 30, right: 65, bottom: 40, left: 20 };
+      const chartW = width - padding.left - padding.right;
+      const chartH = height - padding.top - padding.bottom;
+
+      let minPrice = Infinity;
+      let maxPrice = -Infinity;
+      let minTime = Infinity;
+      let maxTime = -Infinity;
+
+      candles.forEach(c => {
+        if (c.low != null && c.low < minPrice) minPrice = c.low;
+        if (c.close < minPrice) minPrice = c.close;
+        if (c.high != null && c.high > maxPrice) maxPrice = c.high;
+        if (c.close > maxPrice) maxPrice = c.close;
+        if (c.timestamp < minTime) minTime = c.timestamp;
+        if (c.timestamp > maxTime) maxTime = c.timestamp;
+      });
+
+      const priceRange = maxPrice - minPrice || 1;
+      minPrice -= priceRange * 0.05;
+      maxPrice += priceRange * 0.05;
+      const timeRange = maxTime - minTime || 1;
+
+      function getX(timestamp) {
+        return padding.left + ((timestamp - minTime) / timeRange) * chartW;
+      }
+      function getY(price) {
+        return padding.top + (1 - (price - minPrice) / (maxPrice - minPrice)) * chartH;
+      }
+
+      // Draw Gridlines & Price labels on right
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.06)';
+      ctx.fillStyle = '#64748B';
+      ctx.font = '11px JetBrains Mono, monospace';
+      ctx.textAlign = 'left';
+
+      const gridSteps = 5;
+      for (let i = 0; i <= gridSteps; i++) {
+        const p = minPrice + (i / gridSteps) * (maxPrice - minPrice);
+        const y = getY(p);
+        ctx.beginPath();
+        ctx.moveTo(padding.left, y);
+        ctx.lineTo(width - padding.right, y);
+        ctx.stroke();
+
+        ctx.fillText(\`$\${p.toFixed(2)}\`, width - padding.right + 8, y + 4);
+      }
+
+      // Time axis labels
+      const timeSteps = Math.min(6, candles.length);
+      ctx.textAlign = 'center';
+      for (let i = 0; i < timeSteps; i++) {
+        const idx = Math.floor((i / (timeSteps - 1 || 1)) * (candles.length - 1));
+        const c = candles[idx];
+        const x = getX(c.timestamp);
+        const dateObj = new Date(c.timestamp);
+        const timeLabel = currentChartRange === '24h' || currentChartRange === '1d'
+          ? dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+          : dateObj.toLocaleDateString([], { month: 'short', day: 'numeric' });
+
+        ctx.fillText(timeLabel, x, height - padding.bottom + 20);
+      }
+
+      // Draw Gradient Area under Price Line
+      const grad = ctx.createLinearGradient(0, padding.top, 0, padding.top + chartH);
+      grad.addColorStop(0, 'rgba(99, 102, 241, 0.35)');
+      grad.addColorStop(0.7, 'rgba(99, 102, 241, 0.08)');
+      grad.addColorStop(1, 'rgba(99, 102, 241, 0.00)');
+
+      ctx.beginPath();
+      ctx.moveTo(getX(candles[0].timestamp), getY(candles[0].close));
+      for (let i = 1; i < candles.length; i++) {
+        ctx.lineTo(getX(candles[i].timestamp), getY(candles[i].close));
+      }
+      ctx.lineTo(getX(candles[candles.length - 1].timestamp), padding.top + chartH);
+      ctx.lineTo(getX(candles[0].timestamp), padding.top + chartH);
+      ctx.closePath();
+      ctx.fillStyle = grad;
+      ctx.fill();
+
+      // Draw Main Price Line
+      ctx.beginPath();
+      ctx.moveTo(getX(candles[0].timestamp), getY(candles[0].close));
+      for (let i = 1; i < candles.length; i++) {
+        ctx.lineTo(getX(candles[i].timestamp), getY(candles[i].close));
+      }
+      ctx.lineWidth = 2.5;
+      ctx.strokeStyle = '#6366F1';
+      ctx.shadowColor = 'rgba(99, 102, 241, 0.5)';
+      ctx.shadowBlur = 8;
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+
+      // Find price at given timestamp by interpolating
+      function getPriceAtTime(t) {
+        if (t <= candles[0].timestamp) return candles[0].close;
+        if (t >= candles[candles.length - 1].timestamp) return candles[candles.length - 1].close;
+        for (let i = 0; i < candles.length - 1; i++) {
+          const c1 = candles[i];
+          const c2 = candles[i + 1];
+          if (t >= c1.timestamp && t <= c2.timestamp) {
+            const ratio = (t - c1.timestamp) / (c2.timestamp - c1.timestamp);
+            return c1.close + ratio * (c2.close - c1.close);
+          }
+        }
+        return candles[candles.length - 1].close;
+      }
+
+      // Plot Published News Event Dots on Chart
+      news.forEach(n => {
+        const t = new Date(n.publishedAt).getTime();
+        if (t < minTime - 3600000 || t > maxTime + 3600000) return;
+
+        const x = getX(Math.max(minTime, Math.min(maxTime, t)));
+        const priceAtNews = getPriceAtTime(t);
+        const y = getY(priceAtNews);
+
+        const isBull = n.sentiment === 1;
+        const dotColor = isBull ? '#10B981' : '#F43F5E';
+        const isBreaking = n.priority === 'BREAKING_CRITICAL';
+
+        // Outer glow halo if Breaking Critical or Notable Catalyst
+        if (isBreaking) {
+          ctx.beginPath();
+          ctx.arc(x, y, 13, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(239, 68, 68, 0.25)';
+          ctx.fill();
+          ctx.lineWidth = 1.5;
+          ctx.strokeStyle = 'rgba(239, 68, 68, 0.8)';
+          ctx.stroke();
+        } else if (n.priority === 'NOTABLE_CATALYST') {
+          ctx.beginPath();
+          ctx.arc(x, y, 10, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(245, 158, 11, 0.20)';
+          ctx.fill();
+        }
+
+        // Main colored circle
+        ctx.beginPath();
+        ctx.arc(x, y, 6.5, 0, Math.PI * 2);
+        ctx.fillStyle = dotColor;
+        ctx.shadowColor = dotColor;
+        ctx.shadowBlur = 6;
+        ctx.fill();
+        ctx.shadowBlur = 0;
+
+        // White inner pip
+        ctx.beginPath();
+        ctx.arc(x, y, 2.2, 0, Math.PI * 2);
+        ctx.fillStyle = '#FFFFFF';
+        ctx.fill();
+
+        renderedDots.push({ x, y, radius: 10, news: n });
+      });
+
+      // Canvas Interaction Handlers
+      setupCanvasInteractions(canvas, candles, padding, minPrice, maxPrice, minTime, maxTime, chartW, chartH);
+    }
+
+    function setupCanvasInteractions(canvas, candles, padding, minPrice, maxPrice, minTime, maxTime, chartW, chartH) {
+      const tooltip = document.getElementById('chartDotTooltip');
+
+      canvas.onmousemove = (e) => {
+        const rect = canvas.getBoundingClientRect();
+        const mouseX = e.clientX - rect.left;
+        const mouseY = e.clientY - rect.top;
+
+        let hoveredDot = null;
+        for (const dot of renderedDots) {
+          const dist = Math.hypot(dot.x - mouseX, dot.y - mouseY);
+          if (dist <= dot.radius + 3) {
+            hoveredDot = dot;
+            break;
+          }
+        }
+
+        if (hoveredDot) {
+          canvas.style.cursor = 'pointer';
+          tooltip.style.display = 'block';
+          tooltip.style.left = \`\${hoveredDot.x}px\`;
+          tooltip.style.top = \`\${hoveredDot.y}px\`;
+
+          const n = hoveredDot.news;
+          const isBull = n.sentiment === 1;
+          const sentColor = isBull ? '#34D399' : '#F87171';
+          const sentLabel = isBull ? '🟢 Bullish Signal' : '🔴 Bearish Signal';
+          const impact = Math.round((n.urgencyScore || 0) * 100);
+          const timeStr = new Date(n.publishedAt).toLocaleString();
+
+          tooltip.innerHTML = \`
+            <div style="font-weight:700; font-size:11px; margin-bottom:4px; color:\${sentColor}; display:flex; justify-content:space-between;">
+              <span>\${sentLabel}</span>
+              <span style="color:#A5B4FC;">⚡ \${impact}% Impact</span>
+            </div>
+            <div style="font-weight:600; font-size:12px; margin-bottom:6px; color:#FFF; line-height:1.35;">\${n.headline}</div>
+            <div style="font-size:10px; color:#94A3B8; display:flex; justify-content:space-between; align-items:center;">
+              <span>🕒 \${timeStr}</span>
+              <span style="color:#818CF8; font-weight:600;">Click to jump ↓</span>
+            </div>
+          \`;
+        } else {
+          canvas.style.cursor = 'crosshair';
+          tooltip.style.display = 'none';
+        }
+      };
+
+      canvas.onmouseleave = () => {
+        tooltip.style.display = 'none';
+      };
+
+      canvas.onclick = (e) => {
+        const rect = canvas.getBoundingClientRect();
+        const mouseX = e.clientX - rect.left;
+        const mouseY = e.clientY - rect.top;
+
+        for (const dot of renderedDots) {
+          const dist = Math.hypot(dot.x - mouseX, dot.y - mouseY);
+          if (dist <= dot.radius + 4) {
+            const articleEl = document.getElementById('symbol-news-' + dot.news._id);
+            if (articleEl) {
+              articleEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              articleEl.classList.remove('card-highlight-flash');
+              void articleEl.offsetWidth;
+              articleEl.classList.add('card-highlight-flash');
+            }
+            break;
+          }
+        }
+      };
+    }
+
+    function setSymbolNewsFilter(filter, btn) {
+      symbolNewsFilter = filter;
+      document.querySelectorAll('#symbolNewsFilterPills .control-btn').forEach(b => b.classList.remove('active'));
+      if (btn) btn.classList.add('active');
+      filterAndRenderSymbolNews();
+    }
+
+    function onSymbolNewsSortChange(sort) {
+      symbolNewsSort = sort;
+      filterAndRenderSymbolNews();
+    }
+
+    function onSymbolNewsSearch(val) {
+      symbolNewsSearch = (val || '').trim().toLowerCase();
+      filterAndRenderSymbolNews();
+    }
+
+    function filterAndRenderSymbolNews() {
+      if (!currentSymbolData || !currentSymbolData.news) return;
+
+      let news = [...currentSymbolData.news];
+
+      if (symbolNewsFilter === 'breaking') {
+        news = news.filter(n => n.priority === 'BREAKING_CRITICAL');
+      } else if (symbolNewsFilter === 'catalyst') {
+        news = news.filter(n => n.priority === 'NOTABLE_CATALYST');
+      } else if (symbolNewsFilter === 'bullish') {
+        news = news.filter(n => n.sentiment === 1);
+      } else if (symbolNewsFilter === 'bearish') {
+        news = news.filter(n => n.sentiment === 0);
+      }
+
+      if (symbolNewsSearch) {
+        news = news.filter(n =>
+          (n.headline && n.headline.toLowerCase().includes(symbolNewsSearch)) ||
+          (n.summary && n.summary.toLowerCase().includes(symbolNewsSearch))
+        );
+      }
+
+      if (symbolNewsSort === 'impact') {
+        news.sort((a, b) => (b.urgencyScore || 0) - (a.urgencyScore || 0));
+      } else if (symbolNewsSort === 'confidence') {
+        news.sort((a, b) => (b.confidence || 0) - (a.confidence || 0));
+      } else {
+        news.sort((a, b) => new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime());
+      }
+
+      const container = document.getElementById('symbolNewsList');
+      const badge = document.getElementById('symbolNewsCountBadge');
+      const heading = document.getElementById('symbolNewsHeading');
+
+      heading.textContent = \`📰 Published News & Catalysts for \${activeSymbol}\`;
+      badge.textContent = \`\${news.length} Articles\`;
+
+      if (news.length === 0) {
+        container.innerHTML = '<div class="empty-state">No published news articles match your filter criteria.</div>';
+        return;
+      }
+
+      container.innerHTML = news.map(n => {
+        const isBull = n.sentiment === 1;
+        const badgeClass = isBull ? 'pill-bullish' : 'pill-bearish';
+        const badgeText = isBull ? '🟢 BULLISH (1)' : '🔴 BEARISH (0)';
+        const conf = Math.round(n.confidence * 100);
+        const bullProb = (n.probabilities.bullish * 100).toFixed(1);
+        const bearProb = (n.probabilities.bearish * 100).toFixed(1);
+        const timeStr = formatRelativeTime(n.publishedAt);
+        const fullTime = new Date(n.publishedAt).toLocaleString();
+
+        let priorityPill = '<span class="stock-pill pill-routine">📄 ROUTINE</span>';
+        if (n.priority === 'BREAKING_CRITICAL') {
+          priorityPill = '<span class="stock-pill pill-breaking">🔥 BREAKING</span>';
+        } else if (n.priority === 'NOTABLE_CATALYST') {
+          priorityPill = '<span class="stock-pill pill-notable">⚡ NOTABLE</span>';
+        }
+
+        const urgencyPct = Math.round((n.urgencyScore ?? 0) * 100);
+        const isVoiceEligible = n.priority === 'BREAKING_CRITICAL' || n.priority === 'NOTABLE_CATALYST';
+        const audioButtonHtml = isVoiceEligible
+          ? ('<button class="audio-btn" onclick="playVoice(' + n._id + ', this)">🎙 Listen with ElevenLabs</button>')
+          : '';
+
+        return \`
+          <div class="news-card \${n.priority === 'BREAKING_CRITICAL' ? 'breaking' : ''}" id="symbol-news-\${n._id}">
+            <div class="news-card-header">
+              <div class="news-tags">
+                <span class="tag-sym">\${n.symbol}</span>
+                \${priorityPill}
+                <span class="stock-pill pill-urgency">⚡ \${urgencyPct}% Impact</span>
+                <span class="stock-pill \${badgeClass}">\${badgeText}</span>
+                <span class="tag-conf">Confidence: <b>\${conf}%</b> (Bull: \${bullProb}% | Bear: \${bearProb}%)</span>
+              </div>
+              <span class="tag-time" title="\${fullTime}">🕒 \${timeStr}</span>
+            </div>
+            <a href="\${n.url}" target="_blank" rel="noopener noreferrer" class="news-title">
+              \${n.headline}
+            </a>
+            <div class="news-summary">\${n.summary}</div>
+            <div class="news-footer">
+              <span>📡 Source: <b>\${n.source || 'Finnhub'}</b> • Article ID: #\${n._id}</span>
+              \${audioButtonHtml}
+            </div>
+          </div>
+        \`;
+      }).join('');
+    }
+
+    window.addEventListener('resize', () => {
+      if (activeSymbol && currentSymbolData) {
+        renderPriceChart(currentSymbolData);
+      }
+    });
+
     function formatRelativeTime(iso) {
       const diffMs = Date.now() - new Date(iso).getTime();
       const mins = Math.floor(diffMs / 60000);
@@ -1687,6 +2727,9 @@ function renderDashboardHtml(defaultWatchlist: string[]): string {
       fetchTopStocks();
       fetchTopNews();
       fetchNews();
+      if (activeSymbol) {
+        loadSymbolData(activeSymbol, currentChartRange);
+      }
       const label = document.getElementById('refreshLabel');
       label.textContent = 'Updated!';
       setTimeout(() => { label.textContent = 'Refresh'; }, 1000);
@@ -1698,11 +2741,26 @@ function renderDashboardHtml(defaultWatchlist: string[]): string {
     fetchTopNews();
     fetchNews();
 
+    if (INITIAL_SYMBOL) {
+      navigateToSymbol(INITIAL_SYMBOL, false);
+    } else {
+      const p = window.location.pathname;
+      if (p.startsWith('/symbol/')) {
+        const sym = p.replace('/symbol/', '').trim().toUpperCase();
+        if (sym) {
+          navigateToSymbol(sym, false);
+        }
+      }
+    }
+
     // Auto-refresh poll every 4 seconds
     setInterval(() => {
       fetchTopStocks();
       fetchTopNews();
       fetchNews();
+      if (activeSymbol) {
+        loadSymbolData(activeSymbol, currentChartRange);
+      }
     }, 4000);
   </script>
 </body>

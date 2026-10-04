@@ -177,6 +177,17 @@ export class NewsAlertPoller {
           fromDate = syncFrom.toISOString().split('T')[0]!;
         }
 
+        // 1. Fetch real-time market quote
+        try {
+          const quote = await this.finnhubClient.fetchQuote(symbol);
+          if (quote) {
+            await this.storage.saveQuote(quote);
+          }
+        } catch (quoteErr) {
+          console.warn(`⚠️ [Poller] Failed to fetch price quote for ${symbol}:`, quoteErr instanceof Error ? quoteErr.message : quoteErr);
+        }
+
+        // 2. Fetch and process company news
         const articles = await this.finnhubClient.fetchCompanyNews(symbol, fromDate, toDate);
         await this.processArticlesForSymbol(symbol, articles, isFirstRun);
 

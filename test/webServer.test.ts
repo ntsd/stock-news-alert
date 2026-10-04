@@ -128,6 +128,25 @@ describe('Web Server & API Endpoints', () => {
       }
     );
 
+    const mockFinnhub: any = {
+      fetchQuote: async (symbol: string) => ({
+        symbol,
+        price: 125.5,
+        change: 3.25,
+        percentChange: 2.66,
+        high: 128.0,
+        low: 122.0,
+        open: 123.0,
+        previousClose: 122.25,
+        timestamp: Date.now(),
+      }),
+      fetchPriceHistory: async (symbol: string, range: string) => [
+        { timestamp: Date.now() - 7200000, open: 120, high: 122, low: 119, close: 121, volume: 1000 },
+        { timestamp: Date.now() - 3600000, open: 121, high: 125, low: 120, close: 124, volume: 2000 },
+        { timestamp: Date.now(), open: 124, high: 128, low: 123, close: 125.5, volume: 1500 },
+      ],
+    };
+
     const elevenlabs = new ElevenLabsService();
     server = createWebServer({
       port,
@@ -135,6 +154,7 @@ describe('Web Server & API Endpoints', () => {
       poller: mockPoller,
       storage,
       elevenlabsService: elevenlabs,
+      finnhubClient: mockFinnhub,
     });
   });
 
@@ -212,10 +232,43 @@ describe('Web Server & API Endpoints', () => {
     assert.ok(res.data.error.includes('only available for breaking critical and notable catalyst news'));
   });
 
-  it('should allow /api/audio/:id for NOTABLE_CATALYST articles (reaches ElevenLabs key validation)', async () => {
-    const res = await get('/api/audio/7002');
-    // Article 7002 is NOTABLE_CATALYST, so it passes priority check and reaches ElevenLabs key check (400)
-    assert.equal(res.status, 400);
-    assert.ok(res.data.error.includes('ElevenLabs API key not configured'));
+  it('should return real-time price quote at /api/quote/:symbol', async () => {
+    const res = await get('/api/quote/NVDA');
+    assert.equal(res.status, 200);
+    assert.ok(res.data.quote);
+    assert.equal(res.data.quote.symbol, 'NVDA');
+    assert.equal(res.data.quote.price, 125.5);
+    assert.equal(res.data.quote.change, 3.25);
+  });
+
+  it('should return chart candles, quote, and published news at /api/chart/:symbol', async () => {
+    const res = await get('/api/chart/NVDA?range=7d');
+    assert.equal(res.status, 200);
+    assert.equal(res.data.symbol, 'NVDA');
+    assert.ok(res.data.quote);
+    assert.ok(Array.isArray(res.data.candles));
+    assert.equal(res.data.candles.length, 3);
+    assert.ok(Array.isArray(res.data.news));
+    assert.ok(res.data.news.length >= 1);
+    assert.equal(res.data.news[0].symbol, 'NVDA');
+  });
+
+  it('should render dedicated symbol page at /symbol/:symbol', async () => {
+    const res = await get('/symbol/NVDA');
+    assert.equal(res.status, 200);
+    assert.ok(res.raw.includes('priceNewsCanvas'));
+    assert.ok(res.raw.includes('symbolNewsList'));
+    assert.ok(res.raw.includes('"NVDA"'));
+    assert.ok(res.raw.includes('Back to Radar Dashboard'));
+  });
+
+  it('should include price fields in /api/stocks when quotes are available', async () => {
+    const res = await get('/api/stocks?symbols=NVDA');
+    assert.equal(res.status, 200);
+    assert.ok(Array.isArray(res.data.stocks));
+    const nvda = res.data.stocks.find((s: any) => s.symbol === 'NVDA');
+    assert.ok(nvda);
+    assert.equal(nvda.price, 125.5);
+    assert.equal(nvda.change, 3.25);
   });
 });

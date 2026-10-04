@@ -1,5 +1,5 @@
 import { MongoClient, type Collection, type Db } from 'mongodb';
-import type { FinnhubNewsArticle } from '../types/finnhub.js';
+import type { FinnhubNewsArticle, StockQuote } from '../types/finnhub.js';
 import type { JevSentimentResult } from '../types/jev.js';
 import { traceSpan } from '../instrumentation/sentry.js';
 
@@ -58,6 +58,15 @@ export interface StockAggregate {
   lastLabel: 'BULLISH' | 'BEARISH';
   lastHeadline: string;
   lastUpdated: string;
+
+  // Real-time market price metrics
+  price?: number;
+  change?: number;
+  percentChange?: number;
+  dayHigh?: number;
+  dayLow?: number;
+  previousClose?: number;
+  priceUpdatedAt?: string;
 }
 
 export class PredictionStorageService {
@@ -65,8 +74,10 @@ export class PredictionStorageService {
   private db: Db | null = null;
   private collection: Collection<StoredArticle> | null = null;
   private syncCollection: Collection<SyncMetadata> | null = null;
+  private quoteCollection: Collection<StockQuote & { _id: string }> | null = null;
   private readonly memoryStore = new Map<number, StoredArticle>();
   private readonly syncMemoryStore = new Map<string, Date>();
+  private readonly quotesMemoryStore = new Map<string, StockQuote>();
 
   constructor(
     private readonly uri?: string,
@@ -89,6 +100,7 @@ export class PredictionStorageService {
       this.db = this.client.db(this.dbName);
       this.collection = this.db.collection<StoredArticle>('predictions');
       this.syncCollection = this.db.collection<SyncMetadata>('sync_metadata');
+      this.quoteCollection = this.db.collection<StockQuote & { _id: string }>('stock_quotes');
 
       // Create indexes for efficient querying and aggregation
       await this.collection.createIndex({ symbol: 1, publishedAt: -1 });
@@ -97,6 +109,7 @@ export class PredictionStorageService {
       await this.collection.createIndex({ sentiment: 1 });
       await this.collection.createIndex({ urgencyScore: -1 });
       await this.collection.createIndex({ priority: 1 });
+      await this.quoteCollection.createIndex({ symbol: 1 });
 
       console.log('✅ [MongoDB] Connected to centralized MongoDB cluster.');
     } catch (err) {
@@ -104,6 +117,7 @@ export class PredictionStorageService {
       this.client = null;
       this.collection = null;
       this.syncCollection = null;
+      this.quoteCollection = null;
     }
   }
 
@@ -205,6 +219,64 @@ export class PredictionStorageService {
         );
       });
     }
+  }
+
+  /**
+   * Save a real-time stock price quote in MongoDB and memory cache.
+   */
+  public async saveQuote(quote: StockQuote): Promise<void> {
+    const sym = quote.symbol.toUpperCase();
+    const price = quote.price ?? quote.current;
+    const current = quote.current ?? quote.price ?? 0;
+    const normalizedQuote: StockQuote = { ...quote, price, current };
+    this.quotesMemoryStore.set(sym, normalizedQuote);
+
+    if (this.quoteCollection) {
+      await traceSpan('mongo.save_quote', 'db.write', { symbol: sym }, async () => {
+        await this.quoteCollection!.updateOne(
+          { _id: sym },
+          { $set: { ...normalizedQuote, _id: sym } },
+          { upsert: true }
+        );
+      });
+    }
+  }
+
+  /**
+   * Retrieve cached quote for a single symbol.
+   */
+  public async getQuote(symbol: string): Promise<StockQuote | null> {
+    const sym = symbol.toUpperCase();
+    if (this.quoteCollection) {
+      try {
+        const doc = await this.quoteCollection.findOne({ _id: sym });
+        if (doc) return doc;
+      } catch {
+        // Fall back to memory
+      }
+    }
+    return this.quotesMemoryStore.get(sym) || null;
+  }
+
+  /**
+   * Retrieve all cached quotes for watchlists.
+   */
+  public async getAllQuotes(): Promise<Record<string, StockQuote>> {
+    const map: Record<string, StockQuote> = {};
+    for (const [sym, q] of this.quotesMemoryStore.entries()) {
+      map[sym] = q;
+    }
+    if (this.quoteCollection) {
+      try {
+        const docs = await this.quoteCollection.find({}).toArray();
+        for (const d of docs) {
+          map[d.symbol.toUpperCase()] = d;
+        }
+      } catch {
+        // Fall back to memory map
+      }
+    }
+    return map;
   }
 
   /**
@@ -470,10 +542,12 @@ export class PredictionStorageService {
       }
     }
 
+    const quotes = await this.getAllQuotes();
     const result: StockAggregate[] = [];
     for (const [symbol, stats] of map.entries()) {
       const bullishRatio = stats.total > 0 ? stats.bullish / stats.total : 0.5;
       const avgConfidence = stats.total > 0 ? stats.confidenceSum / stats.total : 0;
+      const q = quotes[symbol];
 
       result.push({
         symbol,
@@ -486,6 +560,13 @@ export class PredictionStorageService {
         lastLabel: stats.lastLabel,
         lastHeadline: stats.lastHeadline,
         lastUpdated: stats.lastUpdated,
+        price: q ? (q.price ?? q.current) : undefined,
+        change: q?.change,
+        percentChange: q?.percentChange,
+        dayHigh: q?.high,
+        dayLow: q?.low,
+        previousClose: q?.previousClose,
+        priceUpdatedAt: q?.timestamp ? String(q?.timestamp) : undefined,
       });
     }
 

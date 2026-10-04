@@ -83,6 +83,7 @@ if (config.enableHealthServer) {
     poller,
     storage,
     elevenlabsService,
+    finnhubClient,
   });
 }
 

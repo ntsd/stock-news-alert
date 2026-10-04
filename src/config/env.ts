@@ -41,7 +41,7 @@ export const envSchema = z.object({
   POLL_INTERVAL_MS: z
     .string()
     .optional()
-    .default('2000')
+    .default('2200')
     .transform((val) => Number.parseInt(val, 10))
     .refine((val) => !Number.isNaN(val) && val >= 1000, {
       message: 'POLL_INTERVAL_MS must be an integer >= 1000ms (to honor 60 req/min limit)',
