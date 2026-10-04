@@ -81,10 +81,13 @@ flowchart TD
 ## 🌐 Live Web Dashboard & REST API
 
 The service embeds a dark-mode web application and REST API at `http://localhost:3000`:
-* **Top Watched Equities:** Real-time stock cards ranked by bullish sentiment ratio, confidence meter, and article volume.
-* **Breaking News Feed:** Search and filter by ticker (`NVDA`, `TSLA`, etc.) and sentiment signal (Bullish / Bearish).
-* **ElevenLabs Audio Playback:** Click "🎙 Listen with ElevenLabs" on any card to stream voice synthesis directly in the browser!
-* **Render Telemetry:** Live health status, rate-limit consumption (~50 req/min), and cache hit metrics.
+* **Interactive Interest Symbols Filtering:** Multi-select ticker selector with quick presets (Mega Tech, Semis, China/HK ADRs, EV) and instant search, persisted across sessions in `localStorage`.
+* **Top Impact News Spotlight:** Dedicated hero spotlight section (`/api/top-news`) highlighting high-urgency catalysts and breaking announcements across your selected interest symbols.
+* **Order by Impact / Urgency:** Sort breaking news by TypeSafe Jev `urgencyScore` (Impact), chronological date, or model confidence.
+* **Dynamic Date Range Filtering:** Quick date range selectors (`3D` default, `24H`, `7D`, `30D`, `1Y`) and custom date range pickers.
+* **Top Watched Equities:** Real-time stock cards ranked by bullish sentiment ratio, confidence meter, and article volume, with one-click star (⭐) pinning to toggle interest symbols.
+* **ElevenLabs Audio Playback:** Click "🎙 Listen with ElevenLabs" on any card to stream voice synthesis directly in the browser with live animated audio waves!
+* **Render Telemetry:** Live health status (`/health`), rate-limit consumption (~30 req/min), and cache hit metrics.
 
 ---
 
@@ -153,12 +156,15 @@ Render reads [`render.yaml`](render.yaml) automatically to configure the web ser
 npm test
 ```
 
-10 unit tests verify:
+20 unit tests across 5 test suites verify:
 - Bounded LRU Cache capacity and TTL expiration
 - Telegram HTML entity escaping (`&`, `<`, `>`) and priority banner rendering
 - Centralized MongoDB prediction caching and top stocks ranking
 - Incremental sync timestamp tracking (`getLastSyncDate` / `setLastSyncDate`)
 - ElevenLabs synthesized audio buffer caching and retrieval
+- Environment validation and `HISTORY_SYNC_DAYS` boundary constraints
+- Multi-symbol interest filtering, date range lookbacks, and impact-based ordering
+- Web server endpoints (`/health`, `/api/stocks`, `/api/top-news`, `/api/news`) and HTML rendering
 
 ---
 

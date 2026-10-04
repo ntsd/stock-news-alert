@@ -29,6 +29,18 @@ export interface StoredArticle {
   urgencyScore: number;
 }
 
+export interface NewsQueryOptions {
+  limit?: number;
+  symbol?: string;
+  symbols?: string[];
+  sentiment?: 1 | 0;
+  priority?: 'BREAKING_CRITICAL' | 'NOTABLE_CATALYST' | 'ROUTINE_NOISE';
+  breakingOnly?: boolean;
+  fromDate?: string;
+  toDate?: string;
+  sortBy?: 'date' | 'impact' | 'confidence';
+}
+
 export interface SyncMetadata {
   _id: string; // Ticker symbol, e.g. "AAPL"
   lastSyncedAt: string;
@@ -80,6 +92,7 @@ export class PredictionStorageService {
 
       // Create indexes for efficient querying and aggregation
       await this.collection.createIndex({ symbol: 1, publishedAt: -1 });
+      await this.collection.createIndex({ publishedAt: -1 });
       await this.collection.createIndex({ createdAt: -1 });
       await this.collection.createIndex({ sentiment: 1 });
       await this.collection.createIndex({ urgencyScore: -1 });
@@ -272,44 +285,118 @@ export class PredictionStorageService {
    * Fetches recent news articles ordered by publication date or urgency score.
    */
   public async getRecentNews(
-    limit = 50,
+    optionsOrLimit: number | NewsQueryOptions = 50,
     symbol?: string,
     sentiment?: 1 | 0,
     priority?: 'BREAKING_CRITICAL' | 'NOTABLE_CATALYST' | 'ROUTINE_NOISE',
-    breakingOnly = false
+    breakingOnly = false,
+    fromDate?: string,
+    toDate?: string,
+    sortBy: 'date' | 'impact' | 'confidence' = 'date'
   ): Promise<StoredArticle[]> {
+    const opts: NewsQueryOptions =
+      typeof optionsOrLimit === 'object'
+        ? optionsOrLimit
+        : {
+            limit: optionsOrLimit,
+            symbol,
+            sentiment,
+            priority,
+            breakingOnly,
+            fromDate,
+            toDate,
+            sortBy,
+          };
+
+    const limit = opts.limit ?? 50;
+    const sortMode = opts.sortBy ?? 'date';
+
     if (this.collection) {
       const query: Record<string, unknown> = {};
-      if (symbol) query['symbol'] = symbol.toUpperCase();
-      if (sentiment !== undefined) query['sentiment'] = sentiment;
-      if (priority) query['priority'] = priority;
-      if (breakingOnly) query['isBreaking'] = true;
+
+      if (opts.symbols && opts.symbols.length > 0) {
+        const upperSymbols = opts.symbols.map((s) => s.toUpperCase());
+        query['symbol'] = upperSymbols.length === 1 ? upperSymbols[0] : { $in: upperSymbols };
+      } else if (opts.symbol) {
+        query['symbol'] = opts.symbol.toUpperCase();
+      }
+
+      if (opts.sentiment !== undefined) query['sentiment'] = opts.sentiment;
+      if (opts.priority) query['priority'] = opts.priority;
+      if (opts.breakingOnly) query['isBreaking'] = true;
+
+      if (opts.fromDate || opts.toDate) {
+        const dateRange: Record<string, string> = {};
+        if (opts.fromDate) {
+          dateRange['$gte'] = opts.fromDate.includes('T') ? opts.fromDate : `${opts.fromDate}T00:00:00.000Z`;
+        }
+        if (opts.toDate) {
+          dateRange['$lte'] = opts.toDate.includes('T') ? opts.toDate : `${opts.toDate}T23:59:59.999Z`;
+        }
+        query['publishedAt'] = dateRange;
+      }
+
+      const sortQuery: Record<string, 1 | -1> =
+        sortMode === 'impact'
+          ? { urgencyScore: -1, confidence: -1, publishedAt: -1 }
+          : sortMode === 'confidence'
+            ? { confidence: -1, publishedAt: -1 }
+            : { publishedAt: -1, createdAt: -1 };
 
       return await this.collection
         .find(query)
-        .sort({ publishedAt: -1, createdAt: -1 })
+        .sort(sortQuery)
         .limit(limit)
         .toArray();
     }
 
     // Fallback: query memory store
     let items = Array.from(this.memoryStore.values());
-    if (symbol) {
-      items = items.filter((item) => item.symbol.toUpperCase() === symbol.toUpperCase());
+
+    if (opts.symbols && opts.symbols.length > 0) {
+      const symSet = new Set(opts.symbols.map((s) => s.toUpperCase()));
+      items = items.filter((item) => symSet.has(item.symbol.toUpperCase()));
+    } else if (opts.symbol) {
+      items = items.filter((item) => item.symbol.toUpperCase() === opts.symbol!.toUpperCase());
     }
-    if (sentiment !== undefined) {
-      items = items.filter((item) => item.sentiment === sentiment);
+
+    if (opts.sentiment !== undefined) {
+      items = items.filter((item) => item.sentiment === opts.sentiment);
     }
-    if (priority) {
-      items = items.filter((item) => item.priority === priority);
+    if (opts.priority) {
+      items = items.filter((item) => item.priority === opts.priority);
     }
-    if (breakingOnly) {
+    if (opts.breakingOnly) {
       items = items.filter((item) => item.isBreaking);
     }
 
-    return items
-      .sort((a, b) => new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime())
-      .slice(0, limit);
+    if (opts.fromDate) {
+      const fromTime = new Date(opts.fromDate.includes('T') ? opts.fromDate : `${opts.fromDate}T00:00:00.000Z`).getTime();
+      items = items.filter((item) => new Date(item.publishedAt).getTime() >= fromTime);
+    }
+    if (opts.toDate) {
+      const toTime = new Date(opts.toDate.includes('T') ? opts.toDate : `${opts.toDate}T23:59:59.999Z`).getTime();
+      items = items.filter((item) => new Date(item.publishedAt).getTime() <= toTime);
+    }
+
+    if (sortMode === 'impact') {
+      items.sort((a, b) => {
+        const scoreA = a.urgencyScore ?? (a.priority === 'BREAKING_CRITICAL' ? 0.95 : a.priority === 'NOTABLE_CATALYST' ? 0.6 : 0.1);
+        const scoreB = b.urgencyScore ?? (b.priority === 'BREAKING_CRITICAL' ? 0.95 : b.priority === 'NOTABLE_CATALYST' ? 0.6 : 0.1);
+        if (scoreB !== scoreA) return scoreB - scoreA;
+        if (b.confidence !== a.confidence) return b.confidence - a.confidence;
+        return new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime();
+      });
+    } else if (sortMode === 'confidence') {
+      items.sort((a, b) => {
+        if (b.confidence !== a.confidence) return b.confidence - a.confidence;
+        return new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime();
+      });
+    } else {
+      items.sort((a, b) => new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime());
+    }
+
+    return items.slice(0, limit);
   }
 
   /**
