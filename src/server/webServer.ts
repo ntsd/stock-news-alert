@@ -1521,19 +1521,21 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
     .chart-dot-tooltip {
       position: absolute;
       display: none;
-      z-index: 100;
-      background: rgba(15, 23, 42, 0.96);
-      border: 1px solid rgba(255, 255, 255, 0.16);
-      backdrop-filter: blur(12px);
-      border-radius: 10px;
-      padding: 10px 14px;
+      z-index: 200;
+      background: rgba(8, 11, 17, 0.97);
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      backdrop-filter: blur(16px);
+      border-radius: 12px;
+      padding: 12px 16px;
       color: #FFF;
       font-size: 12px;
-      box-shadow: 0 12px 28px rgba(0, 0, 0, 0.7);
+      box-shadow: 0 16px 40px rgba(0, 0, 0, 0.8), 0 0 0 1px rgba(99,102,241,0.15);
       pointer-events: none;
-      max-width: 280px;
-      line-height: 1.4;
-      transform: translate(-50%, -115%);
+      width: 300px;
+      line-height: 1.5;
+      /* default: appear above and centred on dot */
+      transform: translate(-50%, calc(-100% - 14px));
+      transition: opacity 0.12s ease;
     }
 
     .card-highlight-flash {
@@ -2640,27 +2642,73 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
 
     function showNewsDotTooltip(el, n) {
       const tooltip = document.getElementById('chartDotTooltip');
-      if (!tooltip) return;
+      const wrap = document.getElementById('chartCanvasWrap');
+      if (!tooltip || !wrap) return;
+
       const isBull = n.sentiment === 1;
       const sentColor = isBull ? '#34D399' : '#F87171';
-      const sentLabel = isBull ? '🟢 Bullish Signal' : '🔴 Bearish Signal';
+      const sentEmoji = isBull ? '🟢' : '🔴';
+      const sentLabel = isBull ? 'Bullish' : 'Bearish';
       const impact = Math.round((n.urgencyScore || 0) * 100);
-      const timeStr = new Date(n.publishedAt).toLocaleString();
+      const conf = Math.round((n.confidence || 0) * 100);
+      const price = n._price != null ? '$' + Number(n._price).toFixed(2) : (el.dataset.price ? '$' + Number(el.dataset.price).toFixed(2) : null);
+      const timeStr = new Date(n.publishedAt).toLocaleString(undefined, {
+        month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
+      });
+
+      let priorityColor = '#6B7280';
+      let priorityLabel = '📄 Routine';
+      if (n.priority === 'BREAKING_CRITICAL') { priorityColor = '#EF4444'; priorityLabel = '🔥 Breaking Critical'; }
+      else if (n.priority === 'NOTABLE_CATALYST') { priorityColor = '#F59E0B'; priorityLabel = '⚡ Notable Catalyst'; }
+
+      const bullPct = n.probabilities ? (n.probabilities.bullish * 100).toFixed(0) : '--';
+      const bearPct = n.probabilities ? (n.probabilities.bearish * 100).toFixed(0) : '--';
 
       tooltip.innerHTML = \`
-        <div style="font-weight:700; font-size:11px; margin-bottom:4px; color:\${sentColor}; display:flex; justify-content:space-between;">
-          <span>\${sentLabel}</span>
-          <span style="color:#A5B4FC;">⚡ \${impact}% Impact</span>
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; gap:8px;">
+          <span style="font-size:10px; font-weight:700; color:\${priorityColor}; letter-spacing:0.3px; text-transform:uppercase;">\${priorityLabel}</span>
+          <span style="font-size:10px; color:#94A3B8;">\${timeStr}</span>
         </div>
-        <div style="font-weight:600; font-size:12px; margin-bottom:6px; color:#FFF; line-height:1.35;">\${n.headline}</div>
-        <div style="font-size:10px; color:#94A3B8; display:flex; justify-content:space-between; align-items:center;">
-          <span>🕒 \${timeStr}</span>
-          <span style="color:#818CF8; font-weight:600;">Click to jump ↓</span>
+        <div style="font-weight:600; font-size:13px; color:#F8FAFC; line-height:1.4; margin-bottom:10px;">\${n.headline}</div>
+        <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:6px; margin-bottom:10px;">
+          <div style="background:rgba(255,255,255,0.04); border-radius:7px; padding:5px 8px; text-align:center;">
+            <div style="font-size:9px; color:#64748B; text-transform:uppercase; letter-spacing:0.3px;">Signal</div>
+            <div style="font-size:12px; font-weight:700; color:\${sentColor}; margin-top:1px;">\${sentEmoji} \${sentLabel}</div>
+          </div>
+          <div style="background:rgba(255,255,255,0.04); border-radius:7px; padding:5px 8px; text-align:center;">
+            <div style="font-size:9px; color:#64748B; text-transform:uppercase; letter-spacing:0.3px;">Confidence</div>
+            <div style="font-size:12px; font-weight:700; color:#A5B4FC; margin-top:1px;">\${conf}%</div>
+          </div>
+          <div style="background:rgba(255,255,255,0.04); border-radius:7px; padding:5px 8px; text-align:center;">
+            <div style="font-size:9px; color:#64748B; text-transform:uppercase; letter-spacing:0.3px;">Impact</div>
+            <div style="font-size:12px; font-weight:700; color:#F59E0B; margin-top:1px;">⚡ \${impact}%</div>
+          </div>
+        </div>
+        <div style="display:flex; justify-content:space-between; align-items:center; font-size:10px; color:#64748B; border-top:1px solid rgba(255,255,255,0.06); padding-top:7px;">
+          <span>🐂 \${bullPct}% bull &nbsp;·&nbsp; 🐻 \${bearPct}% bear</span>
+          <span style="color:#818CF8; font-weight:600; font-size:11px;">Click to jump ↓</span>
         </div>
       \`;
+
+      // Smart positioning: place above dot, flip sides if near an edge
+      const dotX = parseFloat(el.style.left) || 0;
+      const dotY = parseFloat(el.style.top) || 0;
+      const tooltipW = 300;
+      const wrapW = wrap.clientWidth;
+
+      // Centre by default, clamp so it doesn't overflow left/right
+      let left = Math.max(tooltipW / 2, Math.min(wrapW - tooltipW / 2, dotX));
+      tooltip.style.left = left + 'px';
+      tooltip.style.top = dotY + 'px';
+
+      // If too close to top, flip below the dot instead
+      if (dotY < 80) {
+        tooltip.style.transform = 'translate(-50%, 14px)';
+      } else {
+        tooltip.style.transform = 'translate(-50%, calc(-100% - 14px))';
+      }
+
       tooltip.style.display = 'block';
-      tooltip.style.left = el.style.left;
-      tooltip.style.top = el.style.top;
     }
 
     function hideNewsDotTooltip() {
@@ -2669,13 +2717,47 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
     }
 
     function jumpToNewsArticle(articleId) {
-      const articleEl = document.getElementById('symbol-news-' + articleId);
-      if (articleEl) {
-        articleEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        articleEl.classList.remove('card-highlight-flash');
-        void articleEl.offsetWidth;
-        articleEl.classList.add('card-highlight-flash');
+      // Find which page the article lives on (respecting current filter/sort)
+      if (!currentSymbolData || !currentSymbolData.news) return;
+
+      let news = [...currentSymbolData.news];
+      if (symbolNewsFilter === 'breaking') news = news.filter(n => n.priority === 'BREAKING_CRITICAL');
+      else if (symbolNewsFilter === 'catalyst') news = news.filter(n => n.priority === 'NOTABLE_CATALYST');
+      else if (symbolNewsFilter === 'bullish') news = news.filter(n => n.sentiment === 1);
+      else if (symbolNewsFilter === 'bearish') news = news.filter(n => n.sentiment === 0);
+      if (symbolNewsSearch) {
+        news = news.filter(n =>
+          (n.headline && n.headline.toLowerCase().includes(symbolNewsSearch)) ||
+          (n.summary && n.summary.toLowerCase().includes(symbolNewsSearch))
+        );
       }
+      if (symbolNewsSort === 'impact') news.sort((a, b) => (b.urgencyScore || 0) - (a.urgencyScore || 0));
+      else if (symbolNewsSort === 'confidence') news.sort((a, b) => (b.confidence || 0) - (a.confidence || 0));
+      else news.sort((a, b) => new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime());
+
+      const idx = news.findIndex(n => n._id === articleId);
+      if (idx === -1) {
+        // Article not visible under current filter — reset filter to 'all' and retry
+        setSymbolNewsFilter('all', document.querySelector('#symbolNewsFilterPills .control-btn'));
+        return;
+      }
+
+      const targetPage = Math.floor(idx / SYMBOL_NEWS_PAGE_SIZE);
+      if (targetPage !== symbolNewsPage) {
+        symbolNewsPage = targetPage;
+        filterAndRenderSymbolNews();
+      }
+
+      // Slight delay to let the DOM update before scrolling
+      setTimeout(() => {
+        const articleEl = document.getElementById('symbol-news-' + articleId);
+        if (articleEl) {
+          articleEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          articleEl.classList.remove('card-highlight-flash');
+          void articleEl.offsetWidth;
+          articleEl.classList.add('card-highlight-flash');
+        }
+      }, 80);
     }
 
     function setSymbolNewsFilter(filter, btn) {
