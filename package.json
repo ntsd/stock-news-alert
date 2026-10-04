@@ -1,0 +1,40 @@
+{
+  "name": "stock-news-alert",
+  "version": "1.0.0",
+  "description": "Production-ready Node.js stock news alerting service using Finnhub, TypeSafe AI Jev decision models, and Telegram bot alerts.",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test test/*.test.ts"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ntsd/stock-news-alert.git"
+  },
+  "keywords": [
+    "finnhub",
+    "typesafe-ai",
+    "jev",
+    "stock-news",
+    "telegram-bot",
+    "sentiment-analysis",
+    "hacktoberfest",
+    "render"
+  ],
+  "author": "ntsd",
+  "license": "MIT",
+  "dependencies": {
+    "@typesafe-ai/sdk": "^0.6.0",
+    "dotenv": "^16.4.7",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.10",
+    "tsx": "^4.23.15",
+    "typescript": "^5.8.2"
+  }
+}

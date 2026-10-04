@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: stock-news-alert
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: WATCHLIST
+        value: AAPL,TSLA,NVDA,MSFT,AMZN,GOOGL
+      - key: POLL_INTERVAL_MS
+        value: "1200"
+      - key: MIN_CONFIDENCE
+        value: "0.50"
+      - key: ENABLE_HEALTH_SERVER
+        value: "true"
+      - key: FINNHUB_API_KEY
+        sync: false
+      - key: TYPESAFE_API_KEY
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
