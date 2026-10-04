@@ -110,9 +110,11 @@ The service embeds a dark-mode web application and REST API:
 
 ## 🛡 Production Engineering Features
 
-1. **Guaranteed Finnhub Rate Limit Compliance & 1-Minute Poller Cycle:**
+1. **Shared Finnhub Request Pacing:**
    - Free tier limit is 60 requests/minute.
-   - Paced scheduler ticks at `2,000ms` (~30 req/min across 26 tickers), fetching both real-time price quotes and company news continuously without exceeding API caps.
+    - Each symbol poll fetches both a quote and company news. All Finnhub requests, including dashboard fallbacks and retries, share a serial queue with at least `1,200ms` between request starts (at most 50/min per service instance).
+    - A `429` pauses the shared queue for at least 60 seconds, or longer when required by `Retry-After`. The scheduler waits `POLL_INTERVAL_MS` after each completed poll rather than bursting through overdue ticks.
+    - Run one service replica per Finnhub API key. Local runs or overlapping Render deployments sharing that key can still exhaust the upstream quota; multiple replicas require a distributed limiter or separate keys.
 2. **Centralized MongoDB Shared Cache & Startup Warm-Up:**
    - On boot, loads recent article IDs directly into the in-memory LRU cache, guaranteeing zero duplicate alerts across container restarts or Render redeployments.
    - Predictions and synthesized ElevenLabs MP3 binaries are persisted in MongoDB Atlas, sharing model decisions and audio buffers across instances.

@@ -4,10 +4,42 @@ import { withExponentialBackoff } from '../utils/retry.js';
 export class FinnhubClient {
   private readonly apiKey: string;
   private readonly baseUrl: string;
+  private requestQueue: Promise<void> = Promise.resolve();
+  private nextRequestTime = 0;
 
   constructor(apiKey: string, baseUrl = 'https://finnhub.io/api/v1') {
     this.apiKey = apiKey;
     this.baseUrl = baseUrl;
+  }
+
+  /** All Finnhub callers and retry attempts share the same paced queue. */
+  private request(url: URL, timeoutMs: number): Promise<Response> {
+    // ponytail: per-client pacing assumes one service replica per API key.
+    // Multiple replicas need a distributed limiter or separate API keys.
+    const request = this.requestQueue.then(async () => {
+      const delay = Math.max(0, this.nextRequestTime - Date.now());
+      if (delay > 0) await new Promise<void>((resolve) => setTimeout(resolve, delay));
+      this.nextRequestTime = Date.now() + 1200; // At most 50/min, below the 60/min cap.
+      const response = await fetch(url.toString(), {
+        method: 'GET',
+        headers: { 'Accept': 'application/json' },
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      if (response.status === 429) {
+        const retryAfter = response.headers.get('retry-after');
+        const seconds = retryAfter === null ? Number.NaN : Number(retryAfter);
+        const retryDelay = Number.isFinite(seconds)
+          ? seconds * 1000
+          : Date.parse(retryAfter ?? '') - Date.now();
+        const cooldown = Number.isFinite(retryDelay) ? Math.max(60000, retryDelay) : 60000;
+        this.nextRequestTime = Date.now() + cooldown;
+        console.warn(`⚠️ [Finnhub] Rate limited; pausing all Finnhub requests for ${Math.ceil(cooldown / 1000)}s.`);
+      }
+      return response;
+    });
+    // A failed request must not poison the queue for subsequent callers.
+    this.requestQueue = request.then(() => {}, () => {});
+    return request;
   }
 
   /**
@@ -40,13 +72,7 @@ export class FinnhubClient {
 
     return withExponentialBackoff(
       async () => {
-        const response = await fetch(url.toString(), {
-          method: 'GET',
-          headers: {
-            'Accept': 'application/json',
-          },
-          signal: AbortSignal.timeout(10000), // 10s request timeout
-        });
+        const response = await this.request(url, 10000);
 
         if (!response.ok) {
           const errorBody = await response.text().catch(() => '');
@@ -90,11 +116,7 @@ export class FinnhubClient {
     url.searchParams.set('token', this.apiKey);
 
     try {
-      const response = await fetch(url.toString(), {
-        method: 'GET',
-        headers: { 'Accept': 'application/json' },
-        signal: AbortSignal.timeout(8000),
-      });
+      const response = await this.request(url, 8000);
 
       if (!response.ok) {
         return null;

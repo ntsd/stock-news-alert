@@ -42,8 +42,30 @@ function setup(t: TestContext, storage = new PredictionStorageService(), history
   });
   // Exercise one scheduler iteration without starting a background timer.
   Object.assign(poller, { isRunning: true });
-  return { storage, fetchNews, classify, sendAlert, tick: () => poller['tick']() };
+  return { poller, storage, fetchNews, classify, sendAlert, tick: () => poller['tick']() };
 }
+
+describe('NewsAlertPoller scheduling', () => {
+  it('waits a full interval after a slow tick instead of catching up in a burst', async (t) => {
+    t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 0 });
+    const { poller } = setup(t);
+    poller.stop();
+    const scheduler = poller as unknown as { tick(): Promise<void> };
+    const tick = t.mock.method(scheduler, 'tick', async () => {
+      await new Promise<void>((resolve) => setTimeout(resolve, 5000));
+    });
+    t.after(() => poller.stop());
+    poller.start();
+    t.mock.timers.tick(2000);
+    assert.equal(tick.mock.callCount(), 1);
+    t.mock.timers.tick(5000);
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    t.mock.timers.tick(1999);
+    assert.equal(tick.mock.callCount(), 1);
+    t.mock.timers.tick(1);
+    assert.equal(tick.mock.callCount(), 2);
+  });
+});
 
 describe('NewsAlertPoller sync coverage', () => {
   it('backfills only missing older history after changing 3 days to 365 on restart', async (t) => {

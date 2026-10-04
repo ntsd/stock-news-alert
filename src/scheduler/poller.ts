@@ -54,7 +54,6 @@ export class NewsAlertPoller {
   private isRunning = false;
   private timer: NodeJS.Timeout | null = null;
   private symbolIndex = 0;
-  private nextScheduledTime = 0;
 
   // Track symbols that have completed cold-start baseline seeding
   private readonly seededSymbols = new Set<string>();
@@ -91,13 +90,12 @@ export class NewsAlertPoller {
   public start(): void {
     if (this.isRunning) return;
     this.isRunning = true;
-    this.nextScheduledTime = Date.now();
 
     console.log(
       `🚀 [Poller] Started polling scheduler across ${this.watchlist.length} symbols: [${this.watchlist.join(', ')}]`
     );
     console.log(
-      `⏱ [Poller] Pace: 1 request every ${this.pollIntervalMs}ms (~${Math.round(60000 / this.pollIntervalMs)} req/min, free tier cap: 60/min)`
+      `⏱ [Poller] Pace: wait ${this.pollIntervalMs}ms between completed symbol polls (quote + news); all Finnhub calls share a 50 req/min maximum.`
     );
 
     this.scheduleNextTick();
@@ -131,14 +129,11 @@ export class NewsAlertPoller {
   private scheduleNextTick(): void {
     if (!this.isRunning) return;
 
-    this.nextScheduledTime += this.pollIntervalMs;
-    const now = Date.now();
-    const delay = Math.max(0, this.nextScheduledTime - now);
-
+    // Do not burst through overdue ticks after a slow backfill or upstream retry.
     this.timer = setTimeout(async () => {
       await this.tick();
       this.scheduleNextTick();
-    }, delay);
+    }, this.pollIntervalMs);
   }
 
   private async tick(): Promise<void> {
