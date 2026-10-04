@@ -1,4 +1,7 @@
 import http from 'node:http';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { NewsAlertPoller } from '../scheduler/poller.js';
 import type { PredictionStorageService } from '../services/mongodb.js';
 import type { ElevenLabsService } from '../services/elevenlabs.js';
@@ -11,6 +14,24 @@ export interface WebServerOptions {
   storage: PredictionStorageService;
   elevenlabsService: ElevenLabsService;
   finnhubClient?: FinnhubClient;
+}
+
+// ponytail: vendored from node_modules at request time (no build step, no new dependency).
+// Upgrade path: emit the file to disk at boot or serve a CDN copy if node_modules layout changes.
+function loadLightweightChartsScript(): string | null {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const candidates = [
+    path.join(here, '..', '..', 'node_modules', 'lightweight-charts', 'dist', 'lightweight-charts.standalone.production.js'),
+    path.join(here, '..', 'node_modules', 'lightweight-charts', 'dist', 'lightweight-charts.standalone.production.js'),
+  ];
+  for (const p of candidates) {
+    try {
+      return fs.readFileSync(p, 'utf8');
+    } catch {
+      // try next candidate
+    }
+  }
+  return null;
 }
 
 export function createWebServer(options: WebServerOptions): http.Server {
@@ -31,6 +52,22 @@ export function createWebServer(options: WebServerOptions): http.Server {
     }
 
     try {
+      // 0. Vendored TradingView Lightweight Charts browser build (served from node_modules)
+      if (url.pathname === '/vendor/lightweight-charts.js') {
+        const script = loadLightweightChartsScript();
+        if (!script) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'lightweight-charts build not found in node_modules' }));
+          return;
+        }
+        res.writeHead(200, {
+          'Content-Type': 'application/javascript; charset=utf-8',
+          'Cache-Control': 'public, max-age=86400',
+        });
+        res.end(script);
+        return;
+      }
+
       // 1. Health check endpoint (for Render Blueprint zero-downtime health monitoring)
       if (url.pathname === '/health') {
         const stats = poller.getStats();
@@ -1420,11 +1457,63 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
       position: relative;
     }
 
-    #priceNewsCanvas {
+    #priceChartContainer {
       width: 100%;
       height: 100%;
-      display: block;
-      cursor: crosshair;
+      position: relative;
+    }
+
+    .chart-empty-state {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #64748B;
+      font-size: 14px;
+      pointer-events: none;
+    }
+
+    .news-dot-layer {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      overflow: hidden;
+    }
+
+    .news-dot {
+      position: absolute;
+      width: 13px;
+      height: 13px;
+      margin: -6.5px 0 0 -6.5px;
+      border-radius: 50%;
+      border: 2px solid #FFFFFF;
+      cursor: pointer;
+      pointer-events: auto;
+      box-shadow: 0 0 8px rgba(0, 0, 0, 0.55);
+      transition: transform 0.15s ease;
+    }
+
+    .news-dot:hover {
+      transform: scale(1.35);
+    }
+
+    .news-dot.bullish {
+      background: #10B981;
+      box-shadow: 0 0 10px rgba(16, 185, 129, 0.8);
+    }
+
+    .news-dot.bearish {
+      background: #F43F5E;
+      box-shadow: 0 0 10px rgba(244, 63, 94, 0.8);
+    }
+
+    .news-dot.breaking {
+      box-shadow: 0 0 0 4px rgba(239, 68, 68, 0.35), 0 0 14px rgba(239, 68, 68, 0.9);
+    }
+
+    .news-dot.catalyst {
+      box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.30), 0 0 10px rgba(245, 158, 11, 0.7);
     }
 
     .chart-dot-tooltip {
@@ -1462,6 +1551,7 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
       .symbol-hero-right { align-items: flex-start; }
     }
   </style>
+  <script src="/vendor/lightweight-charts.js"></script>
 </head>
 <body>
   <div class="container">
@@ -1695,7 +1785,8 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
         </div>
 
         <div class="chart-canvas-wrap" id="chartCanvasWrap">
-          <canvas id="priceNewsCanvas"></canvas>
+          <div id="priceChartContainer"></div>
+          <div class="news-dot-layer" id="newsDotLayer"></div>
           <div id="chartDotTooltip" class="chart-dot-tooltip"></div>
         </div>
       </div>
