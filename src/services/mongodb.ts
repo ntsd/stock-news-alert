@@ -131,8 +131,8 @@ export class PredictionStorageService {
     try {
       console.log(`🔌 [MongoDB] Connecting to MongoDB at ${this.uri.replace(/\/\/[^:]+:[^@]+@/, '//***:***@')}...`);
       this.client = new MongoClient(this.uri, {
-        connectTimeoutMS: 5000,
-        serverSelectionTimeoutMS: 5000,
+        connectTimeoutMS: 10000,
+        serverSelectionTimeoutMS: 30000,
       });
       await this.client.connect();
       this.db = this.client.db(this.dbName);

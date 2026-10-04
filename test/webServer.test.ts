@@ -466,6 +466,20 @@ describe('Web Server & API Endpoints', () => {
     assert.equal(JSON.stringify(context.saved), '["NVDA"]');
     assert.equal(JSON.stringify(context.semis), '["NVDA"]');
     assert.equal(JSON.stringify(context.china), '[]');
+    for (const stored of [null, '["ORCL","XIACY"]']) {
+      const fallback: any = { localStorage: { getItem: () => stored } };
+      runInNewContext(constants + load + 'saved = loadInterestSymbols();', fallback);
+      assert.equal(JSON.stringify(fallback.saved), '["NVDA","TSLA","AAPL","MSFT"]');
+    }
+    const toggle = raw.slice(raw.indexOf('function toggleInterestSymbol('), raw.indexOf('function selectPreset('));
+    const toggleContext: any = {};
+    runInNewContext(constants + toggle + `
+      let interestSymbols = ['NVDA'];
+      function saveInterestSymbols() {}
+      toggleInterestSymbol('ORCL'); selected = interestSymbols;
+    `, toggleContext);
+    assert.equal(JSON.stringify(toggleContext.selected), '["NVDA"]');
+    assert.ok(raw.includes('container.innerHTML = ALL_SYMBOLS.map(sym =>'));
     assert.ok(!raw.includes("selectPreset('ev')"));
   });
 

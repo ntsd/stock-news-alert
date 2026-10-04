@@ -1980,8 +1980,8 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
       } catch (e) {
         console.warn('Failed to read interest symbols from localStorage:', e);
       }
-      // Default: top 6 leaders if no store
-      return ['NVDA', 'TSLA', 'AAPL', 'MSFT', 'AMZN', 'GOOGL'];
+      // Default leaders must also belong to the configured watchlist.
+      return ['NVDA', 'TSLA', 'AAPL', 'MSFT', 'AMZN', 'GOOGL'].filter(s => ALL_SYMBOLS.includes(s));
     }
 
     function saveInterestSymbols() {
@@ -1998,6 +1998,7 @@ function renderDashboardHtml(defaultWatchlist: string[], initialSymbol?: string)
 
     function toggleInterestSymbol(sym) {
       const upper = sym.toUpperCase();
+      if (!ALL_SYMBOLS.includes(upper)) return;
       const idx = interestSymbols.indexOf(upper);
       if (idx >= 0) {
         interestSymbols.splice(idx, 1);
